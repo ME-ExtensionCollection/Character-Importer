@@ -1,0 +1,9 @@
+# Dev harness build output (node scripts/build.mjs)
+dev/build/
+dist/
+
+node_modules/
+.env
+.DS_Store
+*.swp
+*~

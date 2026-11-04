@@ -1,0 +1,34 @@
+{
+  "kind": "marinara.personal-extension",
+  "version": 1,
+  "config": {
+    "name": "Char Importer",
+    "version": "0.1.0",
+    "description": "Import characters by pasting links (Chub, JanitorAI, RisuRealm, Pygmalion, Wyvern, DataCat, direct PNG/JSON). Skips duplicates by link and content, downloads Chub expressions, gallery and lorebooks, saves card images locally, and cleans up duplicates. Port of the SillyTavern Dupe Link Skip extension.",
+    "runtime": "client",
+    "capabilities": [
+      "full_page_access"
+    ],
+    "jsPath": [
+      "src/core.js",
+      "src/png.js",
+      "src/idb.js",
+      "src/settings.js",
+      "src/bridge.js",
+      "src/net.js",
+      "src/api.js",
+      "src/sources.js",
+      "src/library.js",
+      "src/assets.js",
+      "src/dupes.js",
+      "src/queue.js",
+      "src/dom.js",
+      "src/ui-import.js",
+      "src/ui-queue.js",
+      "src/ui-tools.js",
+      "src/inject.js",
+      "src/main.js"
+    ],
+    "cssPath": "extension.css"
+  }
+}
