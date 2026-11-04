@@ -281,15 +281,16 @@ const ciToolsUi = (() => {
     }));
 
     const refresh = (running, label) => {
-      const job = ciAssets.currentJob();
-      const mine = (kind) => running && job?.kind === kind;
-      const other = (kind) => running && !!job && job.kind !== kind;
+      // runJob calls this just before the job starts, so fall back to the label
+      const active = running ? (ciAssets.currentJob()?.kind ?? label ?? null) : null;
+      const mine = (kind) => active === kind;
+      const other = (kind) => !!active && active !== kind;
       const isRetry = (kind) => kind === "Retry failed images" || kind === "Find unsaved images";
       fetchBtn.textContent = mine("Fetch assets") ? "Stop" : "Fetch assets";
-      retryBtn.textContent = running && job && isRetry(job.kind) ? "Stop" : "Retry failed images";
+      retryBtn.textContent = active && isRetry(active) ? "Stop" : "Retry failed images";
       stRestoreBtn.textContent = mine(ST_JOB) ? "Stop" : "Restore from folder";
       fetchBtn.disabled = other("Fetch assets");
-      retryBtn.disabled = running && !!job && !isRetry(job.kind);
+      retryBtn.disabled = !!active && !isRetry(active);
       stRestoreBtn.disabled = other(ST_JOB) || (!stFolder && !mine(ST_JOB));
       if (running && label) line.textContent = `${label}…`;
     };
