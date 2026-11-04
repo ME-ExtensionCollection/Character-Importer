@@ -377,11 +377,32 @@ const ciToolsUi = (() => {
             ? `Connected: ${info.name} ${info.version} (${info.hostPolicy === "known" ? "known sites only" : "any public site"}, up to ${Math.round(info.maxBytes / 1048576)} MB).`
             : "Not detected. Without it, sites that block downloads from this page (most image hosts, RisuRealm, AICharacterCards) can't be fetched, and owned Chub cards aren't hidden on Chub.",
         }),
-        h("p", { class: "ci-muted", text: "Install userscript/CharImporter-companion.user.js from this extension's folder in Violentmonkey or Tampermonkey, and add an @match line for this page's address if it isn't 127.0.0.1:7860 or localhost:7860. It replaces the Dupe Link Skip Chub userscript and works for SillyTavern too." }),
+        h("p", { class: "ci-muted", text: "Install userscript/CharImporter-companion.user.js from this extension's folder in Violentmonkey or Tampermonkey, and add an @match line for this page's address (e.g. *://192.168.1.10:7860/*, which covers http and https) if it isn't 127.0.0.1 or localhost on port 7860 or 8000. It replaces the Dupe Link Skip Chub userscript and works for SillyTavern too." }),
         h("div", { class: "ci-row" }, button("Check again", () => render()), button("Send owned list now", async () => {
           await ciLib.publishOwned();
           toast("Owned Chub list sent to the userscript.", "success");
         })),
+      ),
+      section(
+        "Chub in another browser",
+        h("p", {
+          class: "ci-muted",
+          text:
+            "To hide owned cards in a browser that doesn't have Marinara open, copy this address into the userscript menu there (\"Char Importer: set Marinara sync address\"). " +
+            "If Marinara runs on that same computer, use 127.0.0.1 as the host so no login is needed; otherwise sign in to Marinara once in that browser.",
+        }),
+        (() => {
+          const field = h("input", { class: "ci-input", type: "text", value: ciLib.syncAddress(), readOnly: true, onFocus: (e) => e.target.select() });
+          return h("div", { class: "ci-row" }, field, button("Copy", async () => {
+            try {
+              await navigator.clipboard.writeText(field.value);
+              toast("Sync address copied.", "success");
+            } catch {
+              field.select();
+              toast("Couldn't copy; the address is selected, copy it with Ctrl+C.", "warn");
+            }
+          }));
+        })(),
       ),
       section(
         "Test a download",

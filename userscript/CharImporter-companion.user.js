@@ -1,18 +1,16 @@
 // ==UserScript==
 // @name        Char Importer companion
 // @namespace   ME-Extensions-CharImporter
-// @match       http://127.0.0.1:7860/*
-// @match       http://localhost:7860/*
-// @match       https://127.0.0.1:7860/*
-// @match       https://localhost:7860/*
-// @match       https://192.168.1.50:7860/*
-// @match       http://127.0.0.1:8000/*
-// @match       http://localhost:8000/*
+// @match       *://127.0.0.1:7860/*
+// @match       *://localhost:7860/*
+// @match       *://192.168.1.50:7860/*
+// @match       *://127.0.0.1:8000/*
+// @match       *://localhost:8000/*
 // @match       https://*.chub.ai/*
 // @match       https://chub.ai/*
 // @match       https://*.characterhub.org/*
 // @match       https://characterhub.org/*
-// @version     2.0
+// @version     2.2
 // @author      Rojikku
 // @description Hides Chub cards already in your Marinara Engine or SillyTavern library, and downloads files for the Char Importer extension from sites that block downloads from the Marinara page.
 // @run-at      document-idle
@@ -38,7 +36,8 @@
  * On Chub: hides (or greys out) cards you already own.
  *
  * If Marinara or SillyTavern runs on another address or port, add it as
- * another @match line above (e.g. http://192.168.1.10:7860/*).
+ * another @match line above (e.g. *://192.168.1.10:7860/*; the *:// covers
+ * both http and https).
  */
 
 (function () {
@@ -46,7 +45,7 @@
 
   const isChub = /(^|\.)(chub\.ai|characterhub\.org)$/.test(location.hostname);
   const STALE_DAYS = 7;
-  const SCRIPT = { name: "Char Importer companion", version: "2.0" };
+  const SCRIPT = { name: "Char Importer companion", version: "2.2" };
 
   // ── Owned lists, one per app origin ──
 
@@ -59,8 +58,7 @@
     return lists;
   }
 
-  function storeOwned(detail) {
-    const origin = location.origin;
+  function storeOwned(detail, origin = location.origin) {
     const { paths, updated, app } = detail;
     if (!Array.isArray(paths)) throw new Error("no paths");
     GM_setValue(`owned:${origin}`, { paths: paths.map((p) => String(p).toLowerCase()), updated: Number(updated) || Date.now(), app: app ?? "sillytavern" });
@@ -68,6 +66,81 @@
     if (!origins.includes(origin)) GM_setValue("ownedOrigins", [...origins, origin]);
     console.info(`[${SCRIPT.name}] Stored ${paths.length} owned Chub cards for ${origin}`);
   }
+
+  // ── Sync from a Marinara server (for a browser without Marinara open) ──
+
+  const SYNC_EVERY_MS = 5 * 60 * 1000;
+
+  /** Fetches the owned list the extension saved on the server. Resolves its card count. */
+  function syncOwned() {
+    const raw = GM_getValue("syncUrl", "");
+    if (!raw) return Promise.reject(new Error("No sync address set"));
+    const url = new URL(raw);
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: url.href,
+        anonymous: false, // sends the Marinara login cookie, if this browser has one
+        timeout: 15000,
+        responseType: "text",
+        headers: { Accept: "application/json" },
+        onload: (res) => {
+          try {
+            if (res.status === 401 || res.status === 403) throw new Error(`Marinara refused (${res.status}); sign in to Marinara in this browser, or use 127.0.0.1 if it runs on this computer`);
+            if (res.status === 404) throw new Error("Not found (404); copy the address again from Char Importer's Tools");
+            if (res.status < 200 || res.status >= 300) throw new Error(`Marinara answered ${res.status}`);
+            const owned = JSON.parse(res.responseText)?.value?.ownedChub;
+            if (!owned || !Array.isArray(owned.paths)) throw new Error("No owned list saved yet; open Marinara once with Char Importer enabled");
+            // Stamped with the sync time: the server copy is current whenever it can be fetched
+            storeOwned({ paths: owned.paths, updated: Date.now(), app: "marinara" }, url.origin);
+            GM_setValue("syncState", { at: Date.now(), error: null });
+            resolve(owned.paths.length);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        onerror: (res) => reject(new Error(res?.error || `Could not reach ${url.host} (if it uses a self-signed certificate, open the address once in this browser)`)),
+        ontimeout: () => reject(new Error(`No answer from ${url.host}`)),
+      });
+    }).catch((error) => {
+      GM_setValue("syncState", { at: Date.now(), error: String(error?.message ?? error) });
+      throw error;
+    });
+  }
+
+  GM_registerMenuCommand?.("Char Importer: set Marinara sync address", () => {
+    const current = GM_getValue("syncUrl", "");
+    const input = window.prompt("Sync address from Char Importer → Tools → Companion userscript (empty to turn sync off):", current);
+    if (input === null) return;
+    const value = input.trim();
+    if (!value) {
+      GM_setValue("syncUrl", "");
+      alert("Sync turned off.");
+      return;
+    }
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      alert("That isn't a valid address.");
+      return;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      alert("Only http and https addresses.");
+      return;
+    }
+    GM_setValue("syncUrl", url.href);
+    syncOwned().then(
+      (count) => alert(`Synced ${count} owned Chub cards. Reload Chub pages to apply.`),
+      (error) => alert(`Saved, but sync failed: ${error.message}`),
+    );
+  });
+  GM_registerMenuCommand?.("Char Importer: sync owned list now", () => {
+    syncOwned().then(
+      (count) => alert(`Synced ${count} owned Chub cards. Reload Chub pages to apply.`),
+      (error) => alert(`Sync failed: ${error.message}`),
+    );
+  });
 
   if (!isChub) {
     window.addEventListener("dupelinkskip:owned", (event) => {
@@ -292,10 +365,28 @@
     const LIST_SELECTOR = isLegacy ? "div.listings-container" : "#chara-list, .character-list-container";
     let showOwned = GM_getValue("showOwned", false);
 
-    const lists = ownedLists();
-    const owned = new Set(lists.flatMap((l) => l.paths.map((p) => String(p).toLowerCase())));
-    const newest = lists.reduce((max, l) => Math.max(max, Number(l.updated) || 0), 0);
-    const appNames = [...new Set(lists.map((l) => (l.app === "marinara" ? "Marinara" : "SillyTavern")))].join(" / ") || "Marinara or SillyTavern";
+    let lists, owned, newest, appNames;
+    function loadLists() {
+      lists = ownedLists();
+      owned = new Set(lists.flatMap((l) => l.paths.map((p) => String(p).toLowerCase())));
+      newest = lists.reduce((max, l) => Math.max(max, Number(l.updated) || 0), 0);
+      appNames = [...new Set(lists.map((l) => (l.app === "marinara" ? "Marinara" : "SillyTavern")))].join(" / ") || "Marinara or SillyTavern";
+    }
+    loadLists();
+    const syncError = () => (GM_getValue("syncUrl", "") ? GM_getValue("syncState", null)?.error : null);
+
+    if (GM_getValue("syncUrl", "") && Date.now() - (GM_getValue("syncState", null)?.at ?? 0) > SYNC_EVERY_MS) {
+      syncOwned().then(
+        () => {
+          loadLists();
+          render();
+        },
+        (error) => {
+          console.warn(`[${SCRIPT.name}] Sync failed`, error);
+          render();
+        },
+      );
+    }
 
     const style = document.createElement("style");
     style.textContent = `
@@ -363,6 +454,8 @@
       else if (count) text = showOwned ? `Hide ${count} owned cards` : `Show ${count} owned cards`;
       const age = newest ? (Date.now() - newest) / 86400000 : 0;
       if (lists.length && age > STALE_DAYS) text += `${text ? " — " : ""}owned list is ${Math.floor(age)} days old; open ${appNames} to refresh`;
+      const failed = syncError();
+      if (failed) text += `${text ? " — " : ""}sync failed: ${failed}`;
       if (!text) {
         if (banner.isConnected) banner.remove();
         return;

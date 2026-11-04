@@ -167,6 +167,23 @@ const ciLib = (() => {
   // Same events as Dupe Link Skip, so one userscript serves both apps.
 
   let publishTimer = 0;
+  let savedOwnedKey = null;
+  // Leaves room in marinara.storage (1 MB in all) for settings
+  const MAX_SAVED_OWNED_BYTES = 600_000;
+
+  /** Saves the list server side, so the userscript in another browser can fetch it. */
+  async function saveOwned(paths) {
+    const key = [...paths].sort().join("\n");
+    if (key === savedOwnedKey) return;
+    const value = { paths, updated: Date.now() };
+    if (JSON.stringify(value).length > MAX_SAVED_OWNED_BYTES) {
+      marinara.log.warn(`Owned Chub list too large to save for other browsers (${paths.length} cards)`);
+      return;
+    }
+    await marinara.storage.patch({ ownedChub: value });
+    savedOwnedKey = key;
+  }
+
   async function publishOwned() {
     try {
       const paths = await ownedChubPaths();
@@ -175,10 +192,13 @@ const ciLib = (() => {
           detail: JSON.stringify({ paths, updated: Date.now(), app: "marinara", origin: location.origin }),
         }),
       );
+      await saveOwned(paths);
     } catch (error) {
       marinara.log.warn("Could not publish the owned Chub list", error);
     }
   }
+
+  const syncAddress = () => `${location.origin}/api/personal-extensions/${encodeURIComponent(marinara.extension.id)}/storage`;
   function publishOwnedSoon() {
     clearTimeout(publishTimer);
     publishTimer = setTimeout(() => void publishOwned(), 2000);
@@ -193,5 +213,5 @@ const ciLib = (() => {
 
   const get = () => index ?? {};
 
-  return Object.freeze({ load, refresh, put, remove, existing, ownedChubPaths, status, get, entryFor, publishOwned, publishOwnedSoon, dispose });
+  return Object.freeze({ load, refresh, put, remove, existing, ownedChubPaths, status, get, entryFor, publishOwned, publishOwnedSoon, syncAddress, dispose });
 })();

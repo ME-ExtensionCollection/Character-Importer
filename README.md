@@ -68,7 +68,25 @@ SillyTavern too.
   to known card and image sites.
 
 If Marinara or SillyTavern runs on an address the `@match` lines don't
-cover, add a line for it.
+cover, add a line for it, e.g. `// @match *://192.168.1.10:7860/*`
+(`*://` matches both http and https).
+
+### Chub in another browser
+
+To hide owned cards in a browser that doesn't have Marinara open, install
+the userscript there too, then:
+
+1. In Marinara, open Char Importer → Tools → Companion userscript and copy
+   the "Chub in another browser" sync address.
+2. In the other browser, pick "Char Importer: set Marinara sync address" from
+   the userscript menu and paste it.
+
+Chub pages there fetch the list from Marinara at most every 5 minutes
+("sync owned list now" forces it). Marinara saves the list whenever Char
+Importer runs, so keep using it as usual in your main browser. If Marinara
+runs on the same computer, use `127.0.0.1` as the host so no login is
+needed; otherwise sign in to Marinara once in that browser. With a
+self-signed certificate, open the address once there to accept it.
 
 Without the userscript, Chub cards, JanitorAI, Pygmalion, Wyvern and
 DataCat still work (Marinara's server fetches those), and card images are
