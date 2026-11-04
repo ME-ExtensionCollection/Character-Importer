@@ -125,5 +125,54 @@ const ciInject = (() => {
     for (const card of document.querySelectorAll(".ci-modal-card")) card.remove();
   }
 
-  return Object.freeze({ start, stop, setBadge });
+  // ── Open a character's editor ──
+  // Marinara has no extension API for this, so it goes through the Characters
+  // panel: clicking a character's row there opens its editor.
+
+  const PANEL_SELECTOR = '[data-component="CharactersPanelScroll"]';
+  const rowFor = (id) => document.querySelector(`${PANEL_SELECTOR} [data-character-id="${CSS.escape(id)}"]`);
+
+  async function waitFor(find, ms = 3000) {
+    const until = Date.now() + ms;
+    for (;;) {
+      const found = find();
+      if (found || Date.now() > until) return found ?? null;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  function setReactInputValue(input, value) {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  /** @returns {Promise<boolean>} whether the editor was opened */
+  async function openCharacterEditor(id, name) {
+    try {
+      let row = rowFor(id);
+      if (!row) {
+        if (!document.querySelector(PANEL_SELECTOR)) document.querySelector('[data-component="TopBar"] [data-tour="panel-characters"], [data-tour="panel-characters"]')?.click();
+        const panel = await waitFor(() => document.querySelector(PANEL_SELECTOR));
+        const search = panel && (panel.querySelector('input[placeholder*="earch"]') ?? panel.querySelector('input:not([type="checkbox"])'));
+        if (search && name) {
+          const previous = search.value;
+          setReactInputValue(search, name);
+          row = await waitFor(() => rowFor(id));
+          if (row) row.click();
+          setReactInputValue(search, previous);
+          if (row) return true;
+        }
+      }
+      if (row) {
+        row.click();
+        return true;
+      }
+    } catch (error) {
+      marinara.log.warn("Could not open the character editor", error);
+    }
+    ciDom.toast(`Couldn't open the editor automatically. Search for "${name}" in the Characters panel.`, "warn");
+    return false;
+  }
+
+  return Object.freeze({ start, stop, setBadge, openCharacterEditor });
 })();

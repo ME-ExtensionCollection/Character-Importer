@@ -32,6 +32,10 @@ Browse a card site as usual, copy links, paste them all at once:
   (gallery, sprites, tags, favorite, lorebook links), backs each one up in
   your browser, then deletes it. Copies used in chats or groups are never
   deleted.
+- **Failed card images:** in View failed…, each card can be retried, opened
+  in Marinara's editor, or have its failed links removed (images the author
+  deleted); each link can be edited to fix a typo and retried. Changes to the
+  card text are saved as a new version, so they can be reverted.
 - **Coming from SillyTavern:** cards whose images Dupe Link Skip saved on the
   SillyTavern server show `/user/images/…` paths that Marinara doesn't have.
   In Tools → Assets → SillyTavern import, pick SillyTavern's

@@ -224,6 +224,12 @@ textarea.ci-input { resize: vertical; font-family: ui-monospace, SFMono-Regular,
 
 .ci-failed { padding: 0.25rem 0; border-bottom: 1px solid var(--ci-border); }
 .ci-failed > summary { cursor: pointer; }
+.ci-failed-head { display: flex; align-items: center; gap: 0.25rem; list-style: none; }
+.ci-failed-head::-webkit-details-marker { display: none; }
+.ci-failed-head > .ci-grow::before { content: "▸ "; color: var(--ci-muted); }
+.ci-failed[open] > .ci-failed-head > .ci-grow::before { content: "▾ "; }
+.ci-failed-link { display: flex; align-items: baseline; gap: 0.25rem; }
+.ci-failed-link > .ci-icon-btn { flex: none; width: 1.5rem; height: 1.5rem; align-self: center; }
 .ci-failed ul { margin: 0.25rem 0 0.25rem 1rem; padding: 0; }
 .ci-failed li { margin: 0.25rem 0; overflow-wrap: anywhere; }
 .ci-failed a { color: var(--ci-accent); }

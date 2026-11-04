@@ -4,7 +4,7 @@
 const ciToolsUi = (() => {
   "use strict";
 
-  const { h, button, checkbox, dialog, confirm, toast, plural, ago, downloadBlob } = ciDom;
+  const { h, icon, button, checkbox, dialog, confirm, toast, plural, ago, downloadBlob } = ciDom;
   let current = null;
   let tab = "import";
 
@@ -253,7 +253,7 @@ const ciToolsUi = (() => {
     const retryBtn = button("Retry failed images", (e) => runJob(e.shiftKey ? ciAssets.scanUnsaved : ciAssets.retryFailed, e.shiftKey ? "Find unsaved images" : "Retry failed images"), {
       title: "Shift+click: only find cards that still link web images (downloads nothing)",
     });
-    const viewBtn = button("View failed…", () => void viewFailed());
+    const viewBtn = button("View failed…", () => void viewFailed(showFailed));
 
     // SillyTavern import: images Dupe Link Skip saved on the ST server
     const ST_JOB = "Restore SillyTavern images";
@@ -406,28 +406,119 @@ const ciToolsUi = (() => {
     ]);
   }
 
-  async function viewFailed() {
-    const { list } = await ciAssets.failureSummary();
-    const d = dialog({
-      title: "Card images not saved",
-      wide: true,
-      body: list.length
-        ? [
-            h("p", { class: "ci-muted", text: `Hosts skipped for now: ${ciNet.downHosts().join(", ") || "none"}` }),
-            h(
-              "div",
-              { class: "ci-failed-list" },
-              list.map((item) =>
-                h("details", { class: "ci-failed" },
-                  h("summary", { text: `${item.name} (${Object.keys(item.urls).length})` }),
-                  h("ul", {}, Object.entries(item.urls).map(([url, f]) => h("li", {}, h("code", { text: url }), h("span", { class: "ci-muted", text: ` ${f.reason}` })))),
+  /**
+   * Failed card images, with per-card actions: retry, open the editor, remove
+   * the failed links (Marinara keeps a version), and fix a link by hand.
+   * @param {() => Promise<void>} [onChange] refreshes the count on the Assets tab
+   */
+  async function viewFailed(onChange) {
+    const expanded = new Set();
+    const d = dialog({ title: "Card images not saved", wide: true });
+    d.setActions([{ label: "Close", value: null }]);
+    const iconBtn = (name, title, onClick) => h("button", { type: "button", class: "ci-icon-btn", title, "aria-label": title, onClick }, icon(name, 15));
+
+    const render = async () => {
+      const { list } = await ciAssets.failureSummary();
+      if (!list.length) {
+        d.setBody(h("p", { text: "Nothing failed." }));
+        return;
+      }
+      // Runs one card action, then redraws the list with the same cards expanded
+      const act = (fn) => async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const row = e.currentTarget.closest(".ci-failed");
+        row?.querySelectorAll("button").forEach((b) => (b.disabled = true));
+        try {
+          await fn();
+        } catch (error) {
+          toast(ciNet.describe(error), "error");
+        }
+        await onChange?.();
+        await render();
+      };
+      d.setBody(
+        h("p", { class: "ci-muted", text: `Hosts skipped for now: ${ciNet.downHosts().join(", ") || "none"}` }),
+        h(
+          "div",
+          { class: "ci-failed-list" },
+          list.map((item) => {
+            const urls = Object.keys(item.urls);
+            const retry = act(async () => {
+              const r = await ciAssets.retryCard(item.id);
+              toast(`${item.name}: ${plural(r.saved, "image")} saved, ${r.failed} still failing.`, r.failed ? "warn" : "success");
+            });
+            const openEditor = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              d.close(null);
+              close();
+              void ciInject.openCharacterEditor(item.id, item.name);
+            };
+            const remove = act(async () => {
+              const ok = await confirm(
+                "Remove failed image links",
+                `Remove ${plural(urls.length, "image link")} from ${item.name}? Marinara keeps a version, so you can revert it from the card's history.`,
+                "Remove",
+                { kind: "danger" },
+              );
+              if (!ok) return;
+              const n = await ciAssets.removeImageLinks(item.id, urls);
+              toast(`${item.name}: removed ${plural(n, "image")}.`, "success");
+            });
+            const edit = (url) =>
+              act(async () => {
+                const next = await promptLink(url);
+                if (!next) return;
+                const r = await ciAssets.replaceImageLink(item.id, url, next);
+                toast(`${item.name}: link fixed; ${plural(r.saved, "image")} saved, ${r.failed} still failing.`, r.failed ? "warn" : "success");
+              });
+            const details = h(
+              "details",
+              { class: "ci-failed", open: expanded.has(item.id), onToggle: (e) => (e.currentTarget.open ? expanded.add(item.id) : expanded.delete(item.id)) },
+              h(
+                "summary",
+                { class: "ci-failed-head" },
+                h("span", { class: "ci-grow", text: `${item.name} (${urls.length})` }),
+                iconBtn("refresh", "Retry this card", retry),
+                iconBtn("edit", "Open card editor", openEditor),
+                iconBtn("trash", "Remove failed links from card", remove),
+              ),
+              h(
+                "ul",
+                {},
+                Object.entries(item.urls).map(([url, f]) =>
+                  h("li", { class: "ci-failed-link" }, iconBtn("pencil", "Edit link", edit(url)), h("code", { text: url }), h("span", { class: "ci-muted", text: ` ${f.reason}` })),
                 ),
               ),
-            ),
-          ]
-        : [h("p", { text: "Nothing failed." })],
-    });
-    d.setActions([{ label: "Close", value: null }]);
+            );
+            return details;
+          }),
+        ),
+      );
+    };
+    await render();
+  }
+
+  /** Asks for a corrected link. @returns {Promise<string|null>} */
+  async function promptLink(url) {
+    const input = h("input", { class: "ci-input", type: "url", value: url, spellcheck: false });
+    const error = h("p", { class: "ci-error", hidden: true });
+    const d = dialog({ title: "Edit image link", wide: true, body: [h("p", { class: "ci-muted", text: "Fix the link, then the card's images are tried again. Marinara keeps a version of the card." }), input, error] });
+    const save = () => {
+      const next = input.value.trim();
+      const problem = !/^https?:\/\/\S+$/.test(next) ? "Enter an http or https link." : next === url ? "The link hasn't changed." : "";
+      if (problem) {
+        error.textContent = problem;
+        error.hidden = false;
+        return;
+      }
+      d.close(next);
+    };
+    input.addEventListener("keydown", (e) => e.key === "Enter" && (e.preventDefault(), save()));
+    d.setActions([{ label: "Cancel", value: null }, { label: "Save & retry", kind: "primary", onClick: save }]);
+    setTimeout(() => input.focus(), 0);
+    return (await d.result) ?? null;
   }
 
   // ── Asset links ──

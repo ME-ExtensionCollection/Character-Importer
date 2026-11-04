@@ -818,6 +818,92 @@ const ciAssets = (() => {
   }
 
   /** Forget everything stored for deleted characters. */
+  // ── Per-card actions for the failed images list ──
+
+  function assertIdle() {
+    if (job) throw new Error(`Wait for ${job.kind} to finish`);
+  }
+
+  /** Every field change a text rewrite makes, over TEXT_FIELDS and alternate greetings. */
+  function rewriteTextFields(data, rewrite) {
+    const changes = {};
+    for (const field of TEXT_FIELDS) {
+      if (typeof data[field] !== "string") continue;
+      const next = rewrite(data[field]);
+      if (next !== data[field]) changes[field] = next;
+    }
+    if (Array.isArray(data.alternate_greetings)) {
+      const next = data.alternate_greetings.map((g) => (typeof g === "string" ? rewrite(g) : g));
+      if (next.some((g, i) => g !== data.alternate_greetings[i])) changes.alternate_greetings = next;
+    }
+    return changes;
+  }
+
+  const IMG_TAG_RE = /<img\b[^<>]*>/gi;
+  const MARKDOWN_IMAGE_FULL_RE = /!\[[^[\]]*\]\((https?:\/\/[^()[\]\s]+)\)/g;
+
+  /** Removes image references (markdown and whole <img> tags) whose source is in `urls`. */
+  function stripImages(text, urls) {
+    let removed = 0;
+    const out = text
+      .replace(MARKDOWN_IMAGE_FULL_RE, (match, url) => (urls.has(url) ? (removed++, "") : match))
+      .replace(IMG_TAG_RE, (tag) => {
+        let hit = false;
+        rewriteImageUrls(tag, (url) => {
+          if (urls.has(url)) hit = true;
+          return undefined;
+        });
+        return hit ? (removed++, "") : tag;
+      });
+    return { text: out, removed };
+  }
+
+  /**
+   * Deletes the given image links from a card's text. Marinara keeps a version
+   * first, so the card can be reverted from its history.
+   * @returns {Promise<number>} image references removed
+   */
+  async function removeImageLinks(charId, urls) {
+    assertIdle();
+    const wanted = new Set(urls);
+    const row = await ciApi.getCharacter(charId);
+    let removed = 0;
+    const changes = rewriteTextFields(row.data, (text) => {
+      const r = stripImages(text, wanted);
+      removed += r.removed;
+      return r.text;
+    });
+    if (Object.keys(changes).length) await ciApi.updateCharacter(charId, changes, { versionReason: "Removed dead image links" });
+    const failures = { ...((await failuresStore.get(charId)) ?? {}) };
+    for (const url of wanted) delete failures[url];
+    await failuresStore.set(charId, failures);
+    ciApi.refreshMarinara(["characters"]);
+    return removed;
+  }
+
+  /** Tries one card's card images again. @returns {Promise<{saved: number, failed: number}>} */
+  async function retryCard(charId) {
+    assertIdle();
+    const row = await ciApi.getCharacter(charId);
+    const result = await localizeImages(charId, row.data);
+    ciApi.refreshMarinara(["characters", "gallery"]);
+    return { saved: result.saved, failed: result.failed };
+  }
+
+  /** Fixes a mistyped image link in the card text, then tries the card again. */
+  async function replaceImageLink(charId, oldUrl, newUrl) {
+    assertIdle();
+    if (!/^https?:\/\/\S+$/.test(newUrl)) throw new Error("Enter an http or https link");
+    const row = await ciApi.getCharacter(charId);
+    const changes = rewriteTextFields(row.data, (text) => rewriteImageUrls(text, (url) => (url === oldUrl ? newUrl : undefined)));
+    if (!Object.keys(changes).length) throw new Error("That link isn't in the card text anymore");
+    await ciApi.updateCharacter(charId, changes, { versionReason: "Fixed image link" });
+    const failures = { ...((await failuresStore.get(charId)) ?? {}) };
+    delete failures[oldUrl];
+    await failuresStore.set(charId, failures);
+    return retryCard(charId);
+  }
+
   // ── Images SillyTavern saved locally (Dupe Link Skip's /user/images/ paths) ──
 
   const hasStPaths = (data) => TEXT_FIELDS.some((f) => typeof data?.[f] === "string" && data[f].includes("/user/images/")) ||
@@ -1042,6 +1128,7 @@ const ciAssets = (() => {
     galleryState, saveImages, fetchImageBytes, cleanupTempGallery, ensureFolder,
     importExpressions, importChubGallery, importChubLorebooks, importLorebookLink, localizeImages, flagAssetLinks, pruneAssetLinks,
     importAssets, currentJob, stopJob, backfill, failureSummary, retryFailed, scanUnsaved, forget,
+    removeImageLinks, retryCard, replaceImageLink,
     restoreStJob, restoreStCard, resetStLinks, stMissingSummary,
     failuresStore, linksStore, checkedStore, packsStore, hashStore, stMissingStore,
   });
