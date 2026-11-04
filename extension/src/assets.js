@@ -158,6 +158,8 @@ const ciAssets = (() => {
           await ciNet.sleep(error.retryAfterMs, signal);
           continue;
         }
+        // Marinara refused this file (invalid, unsupported or too large): only this image fails
+        if (error instanceof ciNet.HttpError && [400, 413, 415, 422].includes(error.status)) throw new Error(`Marinara refused the image: ${ciNet.describe(error)}`);
         throw new ciNet.LocalSaveError(`Marinara could not store the image: ${ciNet.describe(error)}`);
       }
     }
@@ -881,33 +883,34 @@ const ciAssets = (() => {
     const state = await galleryState(charId);
     let saved = 0;
 
-    /** Uploads the picked copy of one ST path. @returns {Promise<string|null>} gallery file name */
+    /** Uploads the picked copy of one ST path. @returns {Promise<{file?: string, reason?: string}>} */
     const upload = async (path) => {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const file = ciCore.pickStFile(ciCore.stImagePath(path), index, data.name);
-      if (!file) return null;
+      if (!file) return { reason: "Not in the picked folder" };
       try {
         const outcome = await storeBytes(charId, new Uint8Array(await file.arrayBuffer()), file.type, state, signal);
         if (outcome.isNew) saved++;
-        return outcome.file;
+        return { file: outcome.file };
       } catch (error) {
         if (signal?.aborted || error instanceof ciNet.LocalSaveError) throw error;
-        return null; // not an image, or unreadable
+        marinara.log.warn(`SillyTavern image ${path} for ${data.name} not saved`, error);
+        return { reason: ciNet.describe(error) }; // not an image, refused, or unreadable
       }
     };
 
     const local = {};
     const missing = {};
     for (const path of paths) {
-      const file = await upload(path);
+      const { file, reason } = await upload(path);
       if (file) local[path] = file;
-      else missing[path] = originals[path] ?? null;
+      else missing[path] = { url: originals[path] ?? null, reason };
     }
     // Chub gallery images ST saved; ones not found are left to the Chub gallery step
     const galleryMap = { ...(marker(data).gallery ?? {}) };
     let galleryAdded = 0;
     for (const { url, path } of gallery) {
-      const file = await upload(path);
+      const { file } = await upload(path);
       if (!file) continue;
       galleryMap[url] = file;
       galleryAdded++;
@@ -964,6 +967,8 @@ const ciAssets = (() => {
             missing += r.missing;
           } catch (error) {
             if (run.stop) break;
+            // The character went away mid-run: skip it. Anything else means Marinara can't save, so stop.
+            if (error instanceof ciNet.HttpError && error.status === 404) continue;
             throw error;
           }
         }

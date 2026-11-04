@@ -390,7 +390,10 @@ const ciToolsUi = (() => {
                 h("details", { class: "ci-failed" },
                   h("summary", { text: `${item.name} (${Object.keys(item.paths).length})` }),
                   h("div", { class: "ci-row" }, button("Pick folder…", pickFor(item)), button("Reset links", reset([item.id]))),
-                  h("ul", {}, Object.entries(item.paths).map(([path, url]) => h("li", {}, h("code", { text: path }), h("span", { class: "ci-muted", text: url ? ` ← ${url}` : " (no web link recorded)" })))),
+                  h("ul", {}, Object.entries(item.paths).map(([path, entry]) => {
+                    const { url, reason } = entry && typeof entry === "object" ? entry : { url: entry };
+                    return h("li", {}, h("code", { text: path }), h("span", { class: "ci-muted", text: `${url ? ` ← ${url}` : " (no web link recorded)"}${reason ? ` · ${reason}` : ""}` }));
+                  })),
                 ),
               ),
             ),
