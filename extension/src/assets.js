@@ -850,6 +850,16 @@ const ciAssets = (() => {
     return changes;
   }
 
+  /** Chub gallery images ST saved (dupe_link_skip.gallery) that the Chub gallery step hasn't recorded yet. */
+  function pendingStGallery(data) {
+    const map = data?.extensions?.dupe_link_skip?.gallery;
+    if (!map || typeof map !== "object") return [];
+    const done = marker(data).gallery ?? {};
+    return Object.entries(map)
+      .filter(([url, path]) => /^https?:\/\//.test(url) && typeof path === "string" && path.startsWith("/user/images/") && !done[url])
+      .map(([url, path]) => ({ url, path }));
+  }
+
   function stPathsIn(data) {
     const paths = new Set();
     rewriteStFields(data, (path) => void paths.add(path));
@@ -864,35 +874,48 @@ const ciAssets = (() => {
    */
   async function restoreStImages(charId, data, index, { signal } = {}) {
     const paths = stPathsIn(data);
-    if (!paths.length) {
-      await stMissingStore.set(charId, null);
-      return { saved: 0, missing: 0 };
-    }
+    const gallery = pendingStGallery(data);
+    if (!paths.length) await stMissingStore.set(charId, null);
+    if (!paths.length && !gallery.length) return { saved: 0, missing: 0, gallery: 0 };
     const originals = stOriginals(data);
     const state = await galleryState(charId);
-    const local = {};
-    const missing = {};
     let saved = 0;
-    for (const path of paths) {
+
+    /** Uploads the picked copy of one ST path. @returns {Promise<string|null>} gallery file name */
+    const upload = async (path) => {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const file = ciCore.pickStFile(ciCore.stImagePath(path), index, data.name);
-      if (!file) {
-        missing[path] = originals[path] ?? null;
-        continue;
-      }
+      if (!file) return null;
       try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        const outcome = await storeBytes(charId, bytes, file.type, state, signal);
-        local[path] = outcome.file;
+        const outcome = await storeBytes(charId, new Uint8Array(await file.arrayBuffer()), file.type, state, signal);
         if (outcome.isNew) saved++;
+        return outcome.file;
       } catch (error) {
         if (signal?.aborted || error instanceof ciNet.LocalSaveError) throw error;
-        missing[path] = originals[path] ?? null; // not an image, or unreadable
+        return null; // not an image, or unreadable
       }
+    };
+
+    const local = {};
+    const missing = {};
+    for (const path of paths) {
+      const file = await upload(path);
+      if (file) local[path] = file;
+      else missing[path] = originals[path] ?? null;
+    }
+    // Chub gallery images ST saved; ones not found are left to the Chub gallery step
+    const galleryMap = { ...(marker(data).gallery ?? {}) };
+    let galleryAdded = 0;
+    for (const { url, path } of gallery) {
+      const file = await upload(path);
+      if (!file) continue;
+      galleryMap[url] = file;
+      galleryAdded++;
     }
     await hashStore.set(charId, state.hashes);
-    await stMissingStore.set(charId, missing);
-    if (!Object.keys(local).length) return { saved, missing: Object.keys(missing).length };
+    if (paths.length) await stMissingStore.set(charId, missing);
+    const result = { saved, missing: Object.keys(missing).length, gallery: galleryAdded };
+    if (!Object.keys(local).length && !galleryAdded) return result;
 
     const greetingImages = [];
     const changes = rewriteStFields(data, (path, field) => {
@@ -903,13 +926,18 @@ const ciAssets = (() => {
     });
     const images = { ...(marker(data).images ?? {}) };
     for (const [path, file] of Object.entries(local)) if (originals[path]) images[originals[path]] = file;
-    const extensions = { char_importer: pinnedMarker(data, { images }) };
+    const extensions = { char_importer: pinnedMarker(data, { images, ...(galleryAdded ? { gallery: galleryMap } : {}) }) };
     if (greetingImages.length) {
       const previous = Array.isArray(data.extensions?.bakedGreetingImages) ? data.extensions.bakedGreetingImages : [];
       extensions.bakedGreetingImages = [...new Map([...previous, ...greetingImages].map((e) => [e.url, e])).values()];
     }
-    await ciApi.updateCharacter(charId, { ...changes, extensions }, { versionReason: "Restored SillyTavern images" });
-    return { saved, missing: Object.keys(missing).length };
+    const changedText = Object.keys(changes).length > 0;
+    await ciApi.updateCharacter(
+      charId,
+      { ...changes, extensions },
+      changedText ? { versionReason: "Restored SillyTavern images" } : { skipVersionSnapshot: true },
+    );
+    return result;
   }
 
   /** Restore ST images for the whole library from a picked folder. */
@@ -919,18 +947,20 @@ const ciAssets = (() => {
       let cards = 0;
       let saved = 0;
       let missing = 0;
+      let gallery = 0;
       let scanned = 0;
       for await (const rows of ciApi.iterateCharacters()) {
         if (run.stop) break;
         scanned += rows.length;
         for (const row of rows) {
           if (run.stop) break;
-          if (!hasStPaths(row.data)) continue;
+          if (!hasStPaths(row.data) && !pendingStGallery(row.data).length) continue;
           cards++;
           onStatus(`Restore SillyTavern images: ${row.data.name} (card ${cards}, ${scanned} scanned, ${saved} images saved)`);
           try {
             const r = await restoreStImages(row.id, row.data, index, { signal: run.controller.signal });
             saved += r.saved;
+            gallery += r.gallery;
             missing += r.missing;
           } catch (error) {
             if (run.stop) break;
@@ -939,7 +969,7 @@ const ciAssets = (() => {
         }
       }
       ciApi.refreshMarinara(["characters", "gallery"]);
-      return { cards, saved, missing, stopped: run.stop };
+      return { cards, saved, missing, gallery, stopped: run.stop };
     } finally {
       job = null;
     }

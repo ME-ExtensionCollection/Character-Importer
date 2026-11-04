@@ -244,7 +244,7 @@ const ciToolsUi = (() => {
     };
     const summarize = (label, r) => {
       if (!r) return "";
-      if ("missing" in r) return `${label}: ${plural(r.cards, "card")}, ${plural(r.saved, "image")} saved, ${r.missing} not found${r.stopped ? " (stopped)" : ""}.`;
+      if ("missing" in r) return `${label}: ${plural(r.cards, "card")}, ${plural(r.saved, "image")} saved (${r.gallery} Chub gallery), ${r.missing} card images not found${r.stopped ? " (stopped)" : ""}.`;
       if ("recovered" in r) return `${label}: ${r.done} / ${r.total} cards, ${plural(r.recovered, "image")} saved${r.stopped ? " (stopped)" : ""}.`;
       if ("found" in r) return `${r.found} of ${plural(r.scanned, "card")} still link web images${r.stopped ? " (stopped)" : ""}.`;
       return `${label}: ${r.done} / ${plural(r.total, "card")}${r.warned ? `, ${r.warned} with warnings` : ""}${r.stopped ? " (stopped)" : ""}.`;
@@ -312,7 +312,7 @@ const ciToolsUi = (() => {
           class: "ci-muted",
           text:
             "Cards imported from SillyTavern can point at images Dupe Link Skip saved on the SillyTavern server (/user/images/…), which Marinara doesn't have. " +
-            "Pick SillyTavern's data/<user>/user/images folder to upload them from there. Files are matched by name, so images under numbered folders (Airi6 for Airi) are found too.",
+            "Pick SillyTavern's data/<user>/user/images folder to upload them from there. Files are matched by name, so images under numbered folders (Airi6 for Airi) are found too. Chub gallery images SillyTavern saved are uploaded as well, so Fetch assets skips them.",
         }),
         h("div", { class: "ci-row" }, stPickBtn, stPicked, stRestoreBtn),
         h("div", { class: "ci-row" }, h("span", { text: "Not found:" }), stMissingCount, stViewBtn),

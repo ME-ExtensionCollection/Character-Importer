@@ -37,7 +37,8 @@ Browse a card site as usual, copy links, paste them all at once:
   In Tools → Assets → SillyTavern import, pick SillyTavern's
   `data/<user>/user/images` folder and choose Restore from folder. Images are
   matched by file name, so ones under a numbered folder (`Airi6` for `Airi`)
-  are found too. Anything not found is listed: pick a folder for that card,
+  are found too, and Chub gallery images SillyTavern saved are uploaded so
+  Fetch assets skips them. Card images not found are listed: pick a folder for that card,
   or reset its links to the original web links so Retry failed images
   downloads them.
 
