@@ -312,6 +312,31 @@ const ciCore = (() => {
     return name || fallback;
   }
 
+  // ── Card tags through Tag Merger ──
+
+  /** Marinara's tag match key (tagKey in st-character.importer.ts). */
+  const tagKey = (tag) => String(tag).trim().toLocaleLowerCase();
+
+  /**
+   * Final tags for an imported card from Tag Merger's {canonical, other}:
+   * canonicals always stay, other tags follow the Card tags mode.
+   * @param {"all"|"existing"|"none"} mode
+   * @param {Set<string>} [existingKeys] tagKey of every tag in the library, for "existing"
+   */
+  function composeImportTags({ canonical = [], other = [] } = {}, mode = "all", existingKeys = new Set()) {
+    const kept = mode === "none" ? [] : mode === "existing" ? other.filter((t) => existingKeys.has(tagKey(t))) : other;
+    const out = [];
+    const seen = new Set();
+    for (const tag of [...canonical, ...kept]) {
+      if (typeof tag !== "string") continue;
+      const key = tagKey(tag);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(tag.trim());
+    }
+    return out;
+  }
+
   return Object.freeze({
     UUID,
     isValidUrl,
@@ -336,5 +361,7 @@ const ciCore = (() => {
     findDuplicateSets,
     parseLinks,
     safeName,
+    tagKey,
+    composeImportTags,
   });
 })();

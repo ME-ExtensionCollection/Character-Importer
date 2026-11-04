@@ -177,3 +177,11 @@ test("chubPacks and packEntries skip stock images", () => {
   assert.deepEqual(plain(packs.map((p) => p.sub)), [null, "Summer"]);
   assert.deepEqual(plain(core.packEntries(packs[0].pack)), [["joy", "https://x/joy.png"]]);
 });
+
+test("composeImportTags keeps canonicals and filters other tags by mode", () => {
+  const mapped = { canonical: ["Female", "Elf"], other: ["Cozy", "Dark Knight", "female "] };
+  assert.deepEqual(plain(core.composeImportTags(mapped, "all")), ["Female", "Elf", "Cozy", "Dark Knight"]);
+  assert.deepEqual(plain(core.composeImportTags(mapped, "existing", new Set(["cozy"]))), ["Female", "Elf", "Cozy"]);
+  assert.deepEqual(plain(core.composeImportTags(mapped, "none")), ["Female", "Elf"]);
+  assert.deepEqual(plain(core.composeImportTags({}, "all")), []);
+});

@@ -21,6 +21,7 @@
       "src/library.js",
       "src/assets.js",
       "src/dupes.js",
+      "src/tags.js",
       "src/queue.js",
       "src/dom.js",
       "src/ui-import.js",

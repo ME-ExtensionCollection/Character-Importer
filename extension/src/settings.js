@@ -22,6 +22,8 @@ const ciSettings = (() => {
     backfillParts: { expressions: true, gallery: true, images: true, links: true, lorebooks: true },
     // Marinara import options
     tagImportMode: "all",
+    // Tidy card tags with the Tag Merger extension's canonicals
+    tagMerge: false,
     importEmbeddedLorebook: true,
     splitDescription: false,
     regexScriptScope: "character",

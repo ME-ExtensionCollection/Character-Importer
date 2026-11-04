@@ -19,6 +19,11 @@ Browse a card site as usual, copy links, paste them all at once:
   Marinara's own format, so a compatible export restores the web links.
 - **Asset links:** links in creator notes that look like sprite packs or file
   hosts are listed (and the character tagged) so you can grab them by hand.
+- **Tidy tags with Tag Merger** (optional, needs the Tag Merger extension
+  enabled): tags that match one of its canonicals become that canonical,
+  plus its implications, and always stay. Other tags are standardized and
+  follow the Card tags choice, so "No card tags" keeps only canonicals.
+  Tag Merger's Removed list isn't applied here.
 - **Import queue:** links run one at a time; the queue survives reloads.
   After a reload, Resume finishes the card that was cut off instead of
   importing it twice.

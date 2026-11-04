@@ -191,19 +191,35 @@ const ciQueue = (() => {
 
     setStep("Importing");
     const marker = { v: 1, source_key: key, source_url: url, content_hash: hash || undefined, imported_at: new Date().toISOString() };
-    const card = ciSources.withMarker(loaded.card, marker);
+    let card = ciSources.withMarker(loaded.card, marker);
     const importOptions = {
       importEmbeddedLorebook: opts.importEmbeddedLorebook !== false,
       tagImportMode: opts.tagImportMode ?? "all",
       regexScriptScope: opts.regexScriptScope ?? "character",
       splitDescription: !!opts.splitDescription,
     };
+    const tagNotes = [];
+    let merged = null;
+    if (opts.tagMerge) {
+      const { target } = ciSources.editable(card);
+      merged = await ciTags.finalTags(target.tags, importOptions.tagImportMode);
+      if (!merged) tagNotes.push("Tag Merger isn't enabled, so tags weren't merged");
+    }
     let result;
     if (loaded.charx) {
-      // Marinara unpacks the .charx (card, avatar, assets); the marker goes on afterwards
+      // Marinara unpacks the .charx (card, avatar, assets); the marker (and merged tags) go on afterwards
       result = await ciApi.importCharacterFile(loaded.charx, "card.charx", importOptions);
-      await ciApi.updateCharacter(result.characterId, { extensions: { char_importer: marker } }, { skipVersionSnapshot: true });
+      const patch = { extensions: { char_importer: marker } };
+      if (merged) patch.tags = merged.tags;
+      await ciApi.updateCharacter(result.characterId, patch, { skipVersionSnapshot: true });
     } else {
+      if (merged) {
+        // Tags are final already; "all" stops Marinara filtering them again
+        const { card: tagged, target } = ciSources.editable(card);
+        target.tags = merged.tags;
+        card = tagged;
+        importOptions.tagImportMode = "all";
+      }
       if (loaded.avatarDataUrl) importOptions._avatarDataUrl = loaded.avatarDataUrl;
       if (loaded.botBrowserSource) importOptions._botBrowserSource = loaded.botBrowserSource;
       result = await ciApi.importCharacter(card, importOptions);
@@ -223,6 +239,11 @@ const ciQueue = (() => {
     const assets = await ciAssets.importAssets(row.id, row.data, { ...assetOptions(opts), signal, onStep: setStep });
     ciApi.refreshMarinara(["characters", "sprites", "gallery", "lorebooks"]);
     const name = result.name || row.data.name;
+    if (merged) {
+      ciTags.add(merged.tags);
+      if (merged.merged) assets.summary.push(`${merged.merged} tag${merged.merged === 1 ? "" : "s"} merged to canonicals`);
+    }
+    assets.warnings.push(...tagNotes);
     const extra = assets.summary.length ? ` (${assets.summary.join(", ")})` : "";
     if (assets.warnings.length) finish("warn", `Imported ${name}${extra}; ${assets.warnings.join("; ")}`);
     else finish("done", `Imported ${name}${extra}`);
@@ -242,6 +263,7 @@ const ciQueue = (() => {
     try {
       queue.step = "Reading the library";
       notify();
+      ciTags.reset();
       // Catches characters saved after a reload, and anything added outside this queue
       await ciLib.refresh({ onProgress: (text) => ((queue.step = text), notify()) });
       existing = await ciLib.existing();
