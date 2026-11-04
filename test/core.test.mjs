@@ -185,3 +185,32 @@ test("composeImportTags keeps canonicals and filters other tags by mode", () => 
   assert.deepEqual(plain(core.composeImportTags(mapped, "none")), ["Female", "Elf"]);
   assert.deepEqual(plain(core.composeImportTags({}, "all")), []);
 });
+
+test("stImagePath decodes Dupe Link Skip paths", () => {
+  assert.deepEqual(plain(core.stImagePath("/user/images/%20Monster%20Academy/embed-x.png")), { folder: " Monster Academy", file: "embed-x.png" });
+  assert.deepEqual(plain(core.stImagePath("/user/images/embed-x.png")), { folder: "", file: "embed-x.png" });
+  assert.equal(core.stImagePath("https://i.ibb.co/x.png"), null);
+  assert.equal(core.stImagePath("/user/images/"), null);
+});
+
+test("pickStFile prefers the exact folder, then a matching one, then any", () => {
+  const index = core.stFileIndex([
+    { path: "images/Airi6/embed-a.png", file: "airi6-a" },
+    { path: "images/Other/embed-a.png", file: "other-a" },
+    { path: "images/Airi/embed-b.png", file: "airi-b" },
+    { path: "images/Zed/embed-b.png", file: "zed-b" },
+    { path: "images/ Monster Academy/embed-c.png", file: "monster-c" },
+    { path: "images/Somewhere/embed-d.png", file: "any-d" },
+    { path: "images/embed-e.png", file: "root-e" },
+  ]);
+  const pick = (path, name) => core.pickStFile(core.stImagePath(path), index, name);
+  assert.equal(pick("/user/images/Airi6/embed-a.png", "Airi"), "airi6-a");
+  assert.equal(pick("/user/images/Airi3/embed-b.png", "Airi"), "airi-b");
+  assert.equal(pick("/user/images/Monster%20Academy/embed-c.png", "Monster Academy"), "monster-c");
+  assert.equal(pick("/user/images/Nobody/embed-d.png", "Nobody"), "any-d");
+  assert.equal(pick("/user/images/embed-e.png", "X"), "root-e");
+  assert.equal(pick("/user/images/Airi/embed-zzz.png", "Airi"), null);
+  // Picking the parent of "images" keys the same way
+  const parent = core.stFileIndex([{ path: "user/images/Airi6/embed-a.png", file: "p" }]);
+  assert.equal(core.pickStFile(core.stImagePath("/user/images/Airi6/embed-a.png"), parent), "p");
+});

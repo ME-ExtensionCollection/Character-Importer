@@ -17,13 +17,19 @@ const ciAssets = (() => {
   const MARKDOWN_IMAGE_RE = /(!\[[^[\]]*\]\()(https?:\/\/[^()[\]\s]+)(\))/g;
   const HTML_IMAGE_RE = /(<img\b[^<>]*?\ssrc\s*=\s*)(?:"(https?:\/\/[^"]+)"|'(https?:\/\/[^']+)'|(https?:\/\/[^\s>"'`]+))/gi;
 
-  function rewriteImageUrls(text, replace) {
+  // Paths SillyTavern's Dupe Link Skip wrote when it saved images on the ST server
+  // Looser than the web forms: ST cards also have "![[alt](path)", "( path\n)" and '<img class="x"src=...'.
+  const ST_MARKDOWN_IMAGE_RE = /(\]\(\s*)(\/user\/images\/[^()[\]\s]+)(\s*\))/g;
+  const ST_HTML_IMAGE_RE = /(<img\b[^<>]*?[\s"']src\s*=\s*)(?:"\s*(\/user\/images\/[^"]+?)\s*"|'\s*(\/user\/images\/[^']+?)\s*'|(\/user\/images\/[^\s>"'`]+))/gi;
+
+  /** @param {{st?: boolean}} [options] st: match /user/images/ paths instead of web links */
+  function rewriteImageUrls(text, replace, { st = false } = {}) {
     return text
-      .replace(MARKDOWN_IMAGE_RE, (match, open, url, close) => {
+      .replace(st ? ST_MARKDOWN_IMAGE_RE : MARKDOWN_IMAGE_RE, (match, open, url, close) => {
         const next = replace(url);
         return next === undefined ? match : `${open}${next}${close}`;
       })
-      .replace(HTML_IMAGE_RE, (match, prefix, double, single, bare) => {
+      .replace(st ? ST_HTML_IMAGE_RE : HTML_IMAGE_RE, (match, prefix, double, single, bare) => {
         const raw = double ?? single ?? bare ?? "";
         const next = replace(raw.replace(/&amp;/gi, "&"));
         if (next === undefined) return match;
@@ -76,6 +82,7 @@ const ciAssets = (() => {
   const checkedStore = recordOf("assetsChecked"); // id -> {expressions, gallery, lorebooks, images, links: time}
   const packsStore = recordOf("packs"); // id -> {folders: [folder name | null]}
   const hashStore = recordOf("galleryHashes"); // id -> {file: sha1}
+  const stMissingStore = recordOf("stMissing"); // id -> {ST path: original web link | null}
 
   // ── Gallery ──
 
@@ -130,17 +137,29 @@ const ciAssets = (() => {
 
   async function uploadBytes(charId, url, state, signal) {
     const { bytes, contentType } = await ciNet.fetchRemote(url, { signal, accept: "image/*", timeoutMs: 30_000 });
-    const mime = ciPng.sniffImageType(bytes) || contentType.split(";")[0];
+    return storeBytes(charId, bytes, contentType, state, signal);
+  }
+
+  /** Adds image bytes to the gallery, unless the gallery already has the same image. */
+  async function storeBytes(charId, bytes, contentType, state, signal) {
+    const mime = ciPng.sniffImageType(bytes) || String(contentType ?? "").split(";")[0];
     const ext = ciPng.extensionFor(mime);
     if (!ext) throw new Error("Not an image");
     const hash = await ciPng.sha1Hex(bytes);
     const existing = state.byHash.get(hash);
     if (existing) return { file: existing, isNew: false };
     let row;
-    try {
-      row = await ciApi.uploadGallery(charId, bytes, `image.${ext}`, mime);
-    } catch (error) {
-      throw new ciNet.LocalSaveError(`Marinara could not store the image: ${ciNet.describe(error)}`);
+    for (;;) {
+      try {
+        row = await ciApi.uploadGallery(charId, bytes, `image.${ext}`, mime);
+        break;
+      } catch (error) {
+        if (error instanceof ciNet.RateLimitError) {
+          await ciNet.sleep(error.retryAfterMs, signal);
+          continue;
+        }
+        throw new ciNet.LocalSaveError(`Marinara could not store the image: ${ciNet.describe(error)}`);
+      }
     }
     const file = fileOf(row) || row?.filename;
     if (!file) throw new ciNet.LocalSaveError("Marinara stored the image but returned no file name");
@@ -797,8 +816,190 @@ const ciAssets = (() => {
   }
 
   /** Forget everything stored for deleted characters. */
+  // ── Images SillyTavern saved locally (Dupe Link Skip's /user/images/ paths) ──
+
+  const hasStPaths = (data) => TEXT_FIELDS.some((f) => typeof data?.[f] === "string" && data[f].includes("/user/images/")) ||
+    (Array.isArray(data?.alternate_greetings) && data.alternate_greetings.some((g) => typeof g === "string" && g.includes("/user/images/")));
+
+  /** ST path -> the web link Dupe Link Skip replaced, from extensions.dupe_link_skip.images. */
+  function stOriginals(data) {
+    const map = data?.extensions?.dupe_link_skip?.images;
+    const out = {};
+    // Fallback: the "{{// original: <link>}}" comment Dupe Link Skip left after each image
+    const texts = [...TEXT_FIELDS.map((f) => data?.[f]), ...(Array.isArray(data?.alternate_greetings) ? data.alternate_greetings : [])];
+    for (const text of texts) {
+      if (typeof text !== "string") continue;
+      for (const m of text.matchAll(/(\/user\/images\/[^()[\]\s"'<>]+)[^{}]{0,40}?\{\{\/\/\s*original:\s*(https?:\/\/[^\s{}]+)\s*\}\}/g)) out[m[1]] ??= m[2];
+    }
+    if (map && typeof map === "object") for (const [url, path] of Object.entries(map)) if (typeof path === "string" && /^https?:\/\//.test(url)) out[path] = url;
+    return out;
+  }
+
+  /** Rewrites ST paths in every text field and alternate greeting. replace(path, field) -> new src or undefined. */
+  function rewriteStFields(data, replace) {
+    const changes = {};
+    for (const field of TEXT_FIELDS) {
+      if (typeof data[field] !== "string") continue;
+      const next = rewriteImageUrls(data[field], (path) => replace(path, field), { st: true });
+      if (next !== data[field]) changes[field] = next;
+    }
+    if (Array.isArray(data.alternate_greetings)) {
+      const next = data.alternate_greetings.map((g) => (typeof g === "string" ? rewriteImageUrls(g, (path) => replace(path, "first_mes"), { st: true }) : g));
+      if (next.some((g, i) => g !== data.alternate_greetings[i])) changes.alternate_greetings = next;
+    }
+    return changes;
+  }
+
+  function stPathsIn(data) {
+    const paths = new Set();
+    rewriteStFields(data, (path) => void paths.add(path));
+    return [...paths];
+  }
+
+  /**
+   * Uploads the picked local copies of a card's ST images and points the text
+   * at them. Paths without a copy are kept in the "not found" list.
+   * @param {{byPair: Map, byName: Map}} index from ciCore.stFileIndex
+   * @returns {Promise<{saved: number, missing: number}>}
+   */
+  async function restoreStImages(charId, data, index, { signal } = {}) {
+    const paths = stPathsIn(data);
+    if (!paths.length) {
+      await stMissingStore.set(charId, null);
+      return { saved: 0, missing: 0 };
+    }
+    const originals = stOriginals(data);
+    const state = await galleryState(charId);
+    const local = {};
+    const missing = {};
+    let saved = 0;
+    for (const path of paths) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const file = ciCore.pickStFile(ciCore.stImagePath(path), index, data.name);
+      if (!file) {
+        missing[path] = originals[path] ?? null;
+        continue;
+      }
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const outcome = await storeBytes(charId, bytes, file.type, state, signal);
+        local[path] = outcome.file;
+        if (outcome.isNew) saved++;
+      } catch (error) {
+        if (signal?.aborted || error instanceof ciNet.LocalSaveError) throw error;
+        missing[path] = originals[path] ?? null; // not an image, or unreadable
+      }
+    }
+    await hashStore.set(charId, state.hashes);
+    await stMissingStore.set(charId, missing);
+    if (!Object.keys(local).length) return { saved, missing: Object.keys(missing).length };
+
+    const greetingImages = [];
+    const changes = rewriteStFields(data, (path, field) => {
+      const file = local[path];
+      if (!file) return undefined;
+      if (GREETING_FIELDS.has(field) && originals[path]) greetingImages.push({ file, url: originals[path] });
+      return SELF_FIELDS.has(field) ? selfRef(file) : charRef(charId, file);
+    });
+    const images = { ...(marker(data).images ?? {}) };
+    for (const [path, file] of Object.entries(local)) if (originals[path]) images[originals[path]] = file;
+    const extensions = { char_importer: pinnedMarker(data, { images }) };
+    if (greetingImages.length) {
+      const previous = Array.isArray(data.extensions?.bakedGreetingImages) ? data.extensions.bakedGreetingImages : [];
+      extensions.bakedGreetingImages = [...new Map([...previous, ...greetingImages].map((e) => [e.url, e])).values()];
+    }
+    await ciApi.updateCharacter(charId, { ...changes, extensions }, { versionReason: "Restored SillyTavern images" });
+    return { saved, missing: Object.keys(missing).length };
+  }
+
+  /** Restore ST images for the whole library from a picked folder. */
+  async function restoreStJob({ onStatus, index }) {
+    const run = startJob("Restore SillyTavern images");
+    try {
+      let cards = 0;
+      let saved = 0;
+      let missing = 0;
+      let scanned = 0;
+      for await (const rows of ciApi.iterateCharacters()) {
+        if (run.stop) break;
+        scanned += rows.length;
+        for (const row of rows) {
+          if (run.stop) break;
+          if (!hasStPaths(row.data)) continue;
+          cards++;
+          onStatus(`Restore SillyTavern images: ${row.data.name} (card ${cards}, ${scanned} scanned, ${saved} images saved)`);
+          try {
+            const r = await restoreStImages(row.id, row.data, index, { signal: run.controller.signal });
+            saved += r.saved;
+            missing += r.missing;
+          } catch (error) {
+            if (run.stop) break;
+            throw error;
+          }
+        }
+      }
+      ciApi.refreshMarinara(["characters", "gallery"]);
+      return { cards, saved, missing, stopped: run.stop };
+    } finally {
+      job = null;
+    }
+  }
+
+  /** One card, from a folder picked just for it. */
+  async function restoreStCard(charId, index) {
+    const row = await ciApi.getCharacter(charId);
+    const result = await restoreStImages(charId, row.data, index);
+    ciApi.refreshMarinara(["characters", "gallery"]);
+    return result;
+  }
+
+  /**
+   * Puts the original web links back where no local copy was found, and lists
+   * them under failed images so Retry failed images downloads them.
+   * @returns {Promise<{cards: number, links: number}>}
+   */
+  async function resetStLinks(ids) {
+    let cards = 0;
+    let links = 0;
+    for (const id of ids) {
+      const row = await ciApi.getCharacter(id).catch(() => null);
+      if (!row) {
+        await stMissingStore.set(id, null);
+        continue;
+      }
+      const originals = stOriginals(row.data);
+      const missing = (await stMissingStore.get(id)) ?? {};
+      const restored = [];
+      const changes = rewriteStFields(row.data, (path) => {
+        if (!(path in missing) || !originals[path]) return undefined;
+        restored.push(originals[path]);
+        return originals[path];
+      });
+      if (!restored.length) continue;
+      await ciApi.updateCharacter(id, changes, { versionReason: "Restored web links for SillyTavern images" });
+      const failures = (await failuresStore.get(id)) ?? {};
+      for (const url of restored) failures[url] = { t: Date.now(), reason: "SillyTavern copy not found" };
+      await failuresStore.set(id, failures);
+      const left = Object.fromEntries(Object.entries(missing).filter(([path]) => !originals[path]));
+      await stMissingStore.set(id, left);
+      cards++;
+      links += new Set(restored).size;
+    }
+    ciApi.refreshMarinara(["characters"]);
+    return { cards, links };
+  }
+
+  async function stMissingSummary() {
+    const all = await stMissingStore.all();
+    const index = await ciLib.load();
+    const list = Object.entries(all)
+      .filter(([id]) => index[id])
+      .map(([id, paths]) => ({ id, name: index[id].name, paths }));
+    return { cards: list.length, images: list.reduce((sum, item) => sum + Object.keys(item.paths).length, 0), list };
+  }
+
   async function forget(ids) {
-    for (const store of [failuresStore, linksStore, checkedStore, packsStore, hashStore]) await store.remove(ids);
+    for (const store of [failuresStore, linksStore, checkedStore, packsStore, hashStore, stMissingStore]) await store.remove(ids);
   }
 
   return Object.freeze({
@@ -806,6 +1007,7 @@ const ciAssets = (() => {
     galleryState, saveImages, fetchImageBytes, cleanupTempGallery, ensureFolder,
     importExpressions, importChubGallery, importChubLorebooks, importLorebookLink, localizeImages, flagAssetLinks, pruneAssetLinks,
     importAssets, currentJob, stopJob, backfill, failureSummary, retryFailed, scanUnsaved, forget,
-    failuresStore, linksStore, checkedStore, packsStore, hashStore,
+    restoreStJob, restoreStCard, resetStLinks, stMissingSummary,
+    failuresStore, linksStore, checkedStore, packsStore, hashStore, stMissingStore,
   });
 })();

@@ -312,6 +312,67 @@ const ciCore = (() => {
     return name || fallback;
   }
 
+  // ── Images saved by SillyTavern's Dupe Link Skip (/user/images/...) ──
+
+  /** "/user/images/%20Monster%20Academy/embed-x.png" -> {folder: " Monster Academy", file: "embed-x.png"}, else null. */
+  function stImagePath(src) {
+    const m = String(src ?? "").match(/^\/user\/images\/(.+)$/);
+    if (!m) return null;
+    const parts = m[1].split("/").map((p) => {
+      try {
+        return decodeURIComponent(p);
+      } catch {
+        return p;
+      }
+    });
+    const file = parts.pop();
+    if (!file) return null;
+    return { folder: parts.join("/"), file };
+  }
+
+  /** Comparable folder or card name: no trailing digits, spaces or punctuation, lowercase. */
+  const stFolderKey = (name) =>
+    String(name ?? "")
+      .replace(/\d+$/, "")
+      .replace(/[^\p{L}\p{N}]+/gu, "")
+      .toLowerCase();
+
+  /**
+   * Index of files picked with a folder picker. Keys on the last two path
+   * segments, so picking "images" or a folder above it works the same.
+   * @param {{path: string, file: unknown}[]} files path is webkitRelativePath
+   */
+  function stFileIndex(files) {
+    const byPair = new Map();
+    const byName = new Map();
+    for (const { path, file } of files) {
+      const parts = String(path).split("/");
+      const name = parts.pop();
+      const folder = parts.length > 1 ? parts.pop() : "";
+      if (!name) continue;
+      byPair.set(`${folder}/${name}`, file);
+      if (!byName.has(name)) byName.set(name, []);
+      byName.get(name).push({ folder, file });
+    }
+    return { byPair, byName, size: files.length };
+  }
+
+  /**
+   * The picked file for an ST path: exact folder, else the same file name in a
+   * folder that matches the card or path folder ("Airi" / "Airi6"), else that
+   * file name in any folder. Dupe Link Skip names files by their web link, so
+   * the same name is the same image.
+   */
+  function pickStFile(ref, index, cardName = "") {
+    if (!ref || !index) return null;
+    const exact = index.byPair.get(`${ref.folder.split("/").pop() ?? ""}/${ref.file}`);
+    if (exact) return exact;
+    const candidates = index.byName.get(ref.file);
+    if (!candidates?.length) return null;
+    const wanted = new Set([stFolderKey(ref.folder), stFolderKey(cardName)].filter(Boolean));
+    return (candidates.find((c) => wanted.has(stFolderKey(c.folder))) ?? candidates[0]).file;
+  }
+
   // ── Card tags through Tag Merger ──
 
   /** Marinara's tag match key (tagKey in st-character.importer.ts). */
@@ -363,5 +424,8 @@ const ciCore = (() => {
     safeName,
     tagKey,
     composeImportTags,
+    stImagePath,
+    stFileIndex,
+    pickStFile,
   });
 })();

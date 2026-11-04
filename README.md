@@ -32,6 +32,14 @@ Browse a card site as usual, copy links, paste them all at once:
   (gallery, sprites, tags, favorite, lorebook links), backs each one up in
   your browser, then deletes it. Copies used in chats or groups are never
   deleted.
+- **Coming from SillyTavern:** cards whose images Dupe Link Skip saved on the
+  SillyTavern server show `/user/images/…` paths that Marinara doesn't have.
+  In Tools → Assets → SillyTavern import, pick SillyTavern's
+  `data/<user>/user/images` folder and choose Restore from folder. Images are
+  matched by file name, so ones under a numbered folder (`Airi6` for `Airi`)
+  are found too. Anything not found is listed: pick a folder for that card,
+  or reset its links to the original web links so Retry failed images
+  downloads them.
 
 Supported links: Chub characters and lorebooks, JanitorAI / JannyAI,
 Pygmalion, Wyvern, DataCat, RisuRealm (PNG or `.charx`),

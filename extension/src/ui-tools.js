@@ -239,10 +239,12 @@ const ciToolsUi = (() => {
       } finally {
         refresh(false);
         await showFailed();
+        await showStMissing();
       }
     };
     const summarize = (label, r) => {
       if (!r) return "";
+      if ("missing" in r) return `${label}: ${plural(r.cards, "card")}, ${plural(r.saved, "image")} saved, ${r.missing} not found${r.stopped ? " (stopped)" : ""}.`;
       if ("recovered" in r) return `${label}: ${r.done} / ${r.total} cards, ${plural(r.recovered, "image")} saved${r.stopped ? " (stopped)" : ""}.`;
       if ("found" in r) return `${r.found} of ${plural(r.scanned, "card")} still link web images${r.stopped ? " (stopped)" : ""}.`;
       return `${label}: ${r.done} / ${plural(r.total, "card")}${r.warned ? `, ${r.warned} with warnings` : ""}${r.stopped ? " (stopped)" : ""}.`;
@@ -252,12 +254,43 @@ const ciToolsUi = (() => {
       title: "Shift+click: only find cards that still link web images (downloads nothing)",
     });
     const viewBtn = button("View failed…", () => void viewFailed());
+
+    // SillyTavern import: images Dupe Link Skip saved on the ST server
+    const ST_JOB = "Restore SillyTavern images";
+    const stPicked = h("span", { class: "ci-muted", text: stFolder ? `${plural(stFolder.size, "file")} picked` : "No folder picked" });
+    const stMissingCount = h("span", { class: "ci-muted" });
+    const showStMissing = async () => {
+      const m = await ciAssets.stMissingSummary();
+      stMissingCount.textContent = m.cards ? `${plural(m.cards, "card")}, ${plural(m.images, "image")}` : "none";
+    };
+    const stRestoreBtn = button("Restore from folder", () => runJob((o) => ciAssets.restoreStJob({ ...o, index: stFolder }), ST_JOB), {
+      kind: "primary",
+      disabled: !stFolder,
+      title: "Uploads the picked copies into each character's gallery and points the card text at them",
+    });
+    const stPickBtn = button("Choose images folder…", async () => {
+      const index = await pickStFolder();
+      if (!index) return;
+      stFolder = index;
+      stPicked.textContent = `${plural(index.size, "file")} picked`;
+      stRestoreBtn.disabled = !!ciAssets.currentJob();
+    });
+    const stViewBtn = button("View not found…", () => void viewStMissing(async () => {
+      await showStMissing();
+      await showFailed();
+    }));
+
     const refresh = (running, label) => {
       const job = ciAssets.currentJob();
-      fetchBtn.textContent = running && job?.kind === "Fetch assets" ? "Stop" : "Fetch assets";
-      retryBtn.textContent = running && job && job.kind !== "Fetch assets" ? "Stop" : "Retry failed images";
-      fetchBtn.disabled = running && job?.kind !== "Fetch assets";
-      retryBtn.disabled = running && job?.kind === "Fetch assets";
+      const mine = (kind) => running && job?.kind === kind;
+      const other = (kind) => running && !!job && job.kind !== kind;
+      const isRetry = (kind) => kind === "Retry failed images" || kind === "Find unsaved images";
+      fetchBtn.textContent = mine("Fetch assets") ? "Stop" : "Fetch assets";
+      retryBtn.textContent = running && job && isRetry(job.kind) ? "Stop" : "Retry failed images";
+      stRestoreBtn.textContent = mine(ST_JOB) ? "Stop" : "Restore from folder";
+      fetchBtn.disabled = other("Fetch assets");
+      retryBtn.disabled = running && !!job && !isRetry(job.kind);
+      stRestoreBtn.disabled = other(ST_JOB) || (!stFolder && !mine(ST_JOB));
       if (running && label) line.textContent = `${label}…`;
     };
 
@@ -270,11 +303,103 @@ const ciToolsUi = (() => {
         h("div", { class: "ci-row" }, fetchBtn),
       ),
       section("Card images that could not be saved", h("div", { class: "ci-row" }, retryBtn, failedCount, viewBtn)),
+      h(
+        "details",
+        { class: "ci-details" },
+        h("summary", { text: "SillyTavern import" }),
+        h("p", {
+          class: "ci-muted",
+          text:
+            "Cards imported from SillyTavern can point at images Dupe Link Skip saved on the SillyTavern server (/user/images/…), which Marinara doesn't have. " +
+            "Pick SillyTavern's data/<user>/user/images folder to upload them from there. Files are matched by name, so images under numbered folders (Airi6 for Airi) are found too.",
+        }),
+        h("div", { class: "ci-row" }, stPickBtn, stPicked, stRestoreBtn),
+        h("div", { class: "ci-row" }, h("span", { text: "Not found:" }), stMissingCount, stViewBtn),
+      ),
       line,
     );
     const job = ciAssets.currentJob();
     if (job) refresh(true, job.kind);
     await showFailed();
+    await showStMissing();
+  }
+
+  // Picked SillyTavern images folder; kept until reload
+  let stFolder = null;
+
+  /** Opens a folder picker. @returns {Promise<object|null>} ciCore.stFileIndex of the picked files */
+  function pickStFolder() {
+    return new Promise((resolve) => {
+      const input = h("input", { type: "file", multiple: true, hidden: true });
+      input.webkitdirectory = true;
+      input.addEventListener("change", () => {
+        const files = [...(input.files ?? [])].map((file) => ({ path: file.webkitRelativePath || file.name, file }));
+        input.remove();
+        resolve(files.length ? ciCore.stFileIndex(files) : null);
+      });
+      input.addEventListener("cancel", () => {
+        input.remove();
+        resolve(null);
+      });
+      document.body.append(input);
+      input.click();
+    });
+  }
+
+  async function viewStMissing(onChange) {
+    const { list } = await ciAssets.stMissingSummary();
+    let d;
+    const busy = (fn) => async (e) => {
+      const btn = e?.currentTarget;
+      if (ciAssets.currentJob()) {
+        toast("Wait for the running job to finish first.", "warn");
+        return;
+      }
+      if (btn) btn.disabled = true;
+      try {
+        await fn();
+      } catch (error) {
+        toast(ciNet.describe(error), "error");
+      } finally {
+        await onChange?.();
+        d?.close(null);
+        void viewStMissing(onChange);
+      }
+    };
+    const pickFor = (item) => busy(async () => {
+      const index = await pickStFolder();
+      if (!index) return;
+      const r = await ciAssets.restoreStCard(item.id, index);
+      toast(`${item.name}: ${plural(r.saved, "image")} saved, ${r.missing} still not found.`, r.missing ? "warn" : "success");
+    });
+    const reset = (ids) => busy(async () => {
+      const r = await ciAssets.resetStLinks(ids);
+      toast(`Web links restored on ${plural(r.cards, "card")} (${plural(r.links, "link")}); they're listed under failed images for Retry.`, "success");
+    });
+    d = dialog({
+      title: "SillyTavern images not found",
+      wide: true,
+      body: list.length
+        ? [
+            h("p", { class: "ci-muted", text: "Pick the folder that has a card's images, or reset its links to the original web links. Reset links are retried by Retry failed images. Paths with no recorded web link can only be restored from a folder." }),
+            h(
+              "div",
+              { class: "ci-failed-list" },
+              list.map((item) =>
+                h("details", { class: "ci-failed" },
+                  h("summary", { text: `${item.name} (${Object.keys(item.paths).length})` }),
+                  h("div", { class: "ci-row" }, button("Pick folder…", pickFor(item)), button("Reset links", reset([item.id]))),
+                  h("ul", {}, Object.entries(item.paths).map(([path, url]) => h("li", {}, h("code", { text: path }), h("span", { class: "ci-muted", text: url ? ` ← ${url}` : " (no web link recorded)" })))),
+                ),
+              ),
+            ),
+          ]
+        : [h("p", { text: "Nothing missing." })],
+    });
+    d.setActions([
+      ...(list.length ? [{ label: "Reset all to web links", onClick: () => void reset(list.map((i) => i.id))() }] : []),
+      { label: "Close", value: null },
+    ]);
   }
 
   async function viewFailed() {
