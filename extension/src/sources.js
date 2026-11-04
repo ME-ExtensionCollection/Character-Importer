@@ -153,9 +153,24 @@ const ciSources = (() => {
 
   // ── Loaders: each returns {card, avatarDataUrl, fullPath?} ──
 
+  // Chub refuses some regions (403 "not available in your country"). When
+  // Marinara's server is refused, this browser may still get through (VPN),
+  // so ask from here and skip the server for a while.
+  const SERVER_RETRY_MS = 10 * 60 * 1000;
+  let chubServerRefusedAt = 0;
+
   async function fetchChubDetail(path, signal) {
-    const raw = await ciNet.fetchLocalJson(`/api/bot-browser/chub/character/${encPath(path)}`, { signal });
-    return raw?.data?.node ?? raw?.node ?? null;
+    const pick = (raw) => raw?.data?.node ?? raw?.node ?? null;
+    if (Date.now() - chubServerRefusedAt > SERVER_RETRY_MS) {
+      try {
+        return pick(await ciNet.fetchLocalJson(`/api/bot-browser/chub/character/${encPath(path)}`, { signal }));
+      } catch (error) {
+        if (signal?.aborted || (error instanceof ciNet.HttpError && error.status === 404) || error instanceof ciNet.RateLimitError) throw error;
+        chubServerRefusedAt = Date.now();
+        marinara.log.warn("Marinara's server couldn't read Chub; asking from this browser instead", error);
+      }
+    }
+    return pick(await ciNet.fetchRemoteJson(`https://api.chub.ai/api/characters/${encPath(path)}?full=true&nocache=${Date.now()}`, { signal }));
   }
 
   function chubDetailFields(node) {
