@@ -220,6 +220,7 @@ const ciToolsUi = (() => {
       failedCount.textContent = f.cards ? `(${plural(f.cards, "card")}, ${plural(f.images, "image")})` : "(none)";
     };
 
+    // Jobs outlive this tab: progress and the end go to whichever Assets tab is on screen
     const runJob = async (fn, label) => {
       if (ciAssets.currentJob()) {
         ciAssets.stopJob();
@@ -229,17 +230,33 @@ const ciToolsUi = (() => {
         toast("Wait for the import queue to finish first.", "warn");
         return;
       }
+      jobStatus = `${label}…`;
       refresh(true, label);
+      const shown = () => (assetsView?.line.isConnected ? assetsView : null);
+      let summary;
       try {
-        const result = await fn({ onStatus: (t) => (line.textContent = t) });
-        line.textContent = summarize(label, result);
+        const result = await fn({
+          onStatus: (t) => {
+            jobStatus = t;
+            const v = shown();
+            if (v) v.line.textContent = t;
+          },
+        });
+        summary = summarize(label, result);
       } catch (error) {
-        line.textContent = ciNet.describe(error);
-        toast(ciNet.describe(error), "error");
+        summary = ciNet.describe(error);
+        toast(summary, "error");
       } finally {
-        refresh(false);
-        await showFailed();
-        await showStMissing();
+        jobStatus = "";
+        const v = shown();
+        if (v) {
+          v.refresh(false);
+          v.line.textContent = summary ?? "";
+          await v.showFailed();
+          await v.showStMissing();
+        } else if (summary) {
+          toast(summary, "info");
+        }
       }
     };
     const summarize = (label, r) => {
@@ -319,11 +336,19 @@ const ciToolsUi = (() => {
       ),
       line,
     );
+    assetsView = { line, refresh, showFailed, showStMissing };
     const job = ciAssets.currentJob();
-    if (job) refresh(true, job.kind);
+    if (job) {
+      refresh(true, job.kind);
+      line.textContent = jobStatus || `${job.kind}…`;
+    }
     await showFailed();
     await showStMissing();
   }
+
+  // The Assets tab on screen, and the running job's last progress line
+  let assetsView = null;
+  let jobStatus = "";
 
   // Picked SillyTavern images folder; kept until reload
   let stFolder = null;
