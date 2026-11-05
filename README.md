@@ -99,7 +99,7 @@ the userscript there too, then:
 2. In the other browser, pick "Char Importer: set Marinara sync address" from
    the userscript menu and paste it.
 
-Chub pages there fetch the list from Marinara at most every 5 minutes
+Chub pages there fetch the list from Marinara at most every 30 seconds
 ("sync owned list now" forces it). Marinara saves the list whenever Char
 Importer runs, so keep using it as usual in your main browser. If Marinara
 runs on the same computer, use `127.0.0.1` as the host so no login is

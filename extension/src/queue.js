@@ -233,6 +233,7 @@ const ciQueue = (() => {
     if (hash) existing.hashes.set(hash, result.characterId);
     const row = await ciApi.getCharacter(result.characterId);
     const entry = await ciLib.put(row);
+    ciLib.publishOwnedSoon(); // so Chub hides it without waiting for the whole queue
     for (const k of entry.keys) if (!existing.keys.has(k)) existing.keys.set(k, row.id);
     ciApi.refreshMarinara(["characters", "lorebooks"]);
 

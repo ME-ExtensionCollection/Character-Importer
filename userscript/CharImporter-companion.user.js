@@ -10,7 +10,7 @@
 // @match       https://chub.ai/*
 // @match       https://*.characterhub.org/*
 // @match       https://characterhub.org/*
-// @version     2.2
+// @version     2.3
 // @author      Rojikku
 // @description Hides Chub cards already in your Marinara Engine or SillyTavern library, and downloads files for the Char Importer extension from sites that block downloads from the Marinara page.
 // @run-at      document-idle
@@ -45,7 +45,7 @@
 
   const isChub = /(^|\.)(chub\.ai|characterhub\.org)$/.test(location.hostname);
   const STALE_DAYS = 7;
-  const SCRIPT = { name: "Char Importer companion", version: "2.2" };
+  const SCRIPT = { name: "Char Importer companion", version: "2.3" };
 
   // ── Owned lists, one per app origin ──
 
@@ -69,7 +69,7 @@
 
   // ── Sync from a Marinara server (for a browser without Marinara open) ──
 
-  const SYNC_EVERY_MS = 5 * 60 * 1000;
+  const SYNC_EVERY_MS = 30 * 1000;
 
   /** Fetches the owned list the extension saved on the server. Resolves its card count. */
   function syncOwned() {

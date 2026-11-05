@@ -199,9 +199,13 @@ const ciLib = (() => {
   }
 
   const syncAddress = () => `${location.origin}/api/personal-extensions/${encodeURIComponent(marinara.extension.id)}/storage`;
+  // Not reset by later calls, so a running import queue still publishes every few seconds
   function publishOwnedSoon() {
-    clearTimeout(publishTimer);
-    publishTimer = setTimeout(() => void publishOwned(), 2000);
+    if (publishTimer) return;
+    publishTimer = setTimeout(() => {
+      publishTimer = 0;
+      void publishOwned();
+    }, 3000);
   }
   const onOwnedRequest = () => void publishOwned();
   window.addEventListener("dupelinkskip:request", onOwnedRequest);
