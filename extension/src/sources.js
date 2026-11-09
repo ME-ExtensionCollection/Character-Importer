@@ -533,7 +533,7 @@ const ciSources = (() => {
    * first: logged out, Botbooru quietly lists only the safe-for-work few.
    * `state` is Botbooru's record for your account: "current" (downloaded),
    * "updated" (changed since you downloaded it) or "" (never downloaded).
-   * @returns {Promise<{name: string, cards: {link: string, id: string, state: string}[]}>}
+   * @returns {Promise<{name: string, cards: {link: string, id: string, state: string, tags: string[]}[]}>}
    */
   async function listBotbooruProfile(userId, { signal, onProgress } = {}) {
     await fetchBotbooru("/auth/me", signal);
@@ -548,7 +548,9 @@ const ciSources = (() => {
         const id = String(upload?.id ?? "");
         if (!/^\d+$/.test(id) || (upload.status && upload.status !== "active") || seen.has(id)) continue;
         seen.add(id);
-        cards.push({ link: `https://botbooru.com/character/${id}`, id, state: typeof upload.download_state === "string" ? upload.download_state : "" });
+        // Tags come as names, or as {name, category} on some endpoints
+        const tags = (Array.isArray(upload.tags) ? upload.tags : []).map((t) => ciCore.normTag(typeof t === "string" ? t : t?.name)).filter(Boolean);
+        cards.push({ link: `https://botbooru.com/character/${id}`, id, state: typeof upload.download_state === "string" ? upload.download_state : "", tags });
       }
       const total = Number(page?.uploads_list_total) || 0;
       onProgress?.(cards.length, total);

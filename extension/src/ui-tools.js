@@ -78,6 +78,20 @@ const ciToolsUi = (() => {
         setting("Save Botbooru galleries (needs a Botbooru login in this browser)", "botbooruGallery", "Read through the companion userscript with your Botbooru login. Part of \"Save gallery & card images locally\"."),
       ),
       section(
+        "Leave out of profile imports",
+        h("p", {
+          class: "ci-muted",
+          text: "Tags, one per line (spaces or underscores, any case; a category like general: is optional and ignored). A creator's profile link skips their cards with any of these tags. A card link you paste on its own is still imported.",
+        }),
+        (() => {
+          const box = h("textarea", { class: "ci-input", rows: 4, spellcheck: false, value: ciSettings.get().profileTagBlacklist.join("\n"), placeholder: "tag_name" });
+          box.addEventListener("change", () =>
+            ciSettings.set({ profileTagBlacklist: [...new Set(box.value.split(/\r?\n/).map((l) => ciCore.normTag(l)).filter(Boolean))] }),
+          );
+          return box;
+        })(),
+      ),
+      section(
         "Botbooru repost accounts",
         h("p", {
           class: "ci-muted",

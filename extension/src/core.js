@@ -150,6 +150,14 @@ const ciCore = (() => {
     return typeof value === "string" ? value.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim() : "";
   }
 
+  // Botbooru's tag categories; card lists give bare names, so "general:cute" means "cute"
+  const TAG_CATEGORY = /^(general|scenarios|auto|artist|copyright|language|settings|writer|meta):/;
+
+  /** A tag for comparing: lowercase, spaces as underscores (Botbooru's spelling), no category prefix. */
+  function normTag(value) {
+    return typeof value === "string" ? value.trim().toLowerCase().replace(/\s+/g, "_").replace(TAG_CATEGORY, "") : "";
+  }
+
   /** Botbooru uploader of a card (lowercase), from extensions.botbooru.full_path ("user/id"). */
   function botbooruUploader(data) {
     const path = cardData(data).extensions?.botbooru?.full_path;
@@ -423,7 +431,7 @@ const ciCore = (() => {
   }
 
   return Object.freeze({
-    normName, botbooruUploader,
+    normName, normTag, botbooruUploader,
     UUID,
     isValidUrl,
     chubKey,

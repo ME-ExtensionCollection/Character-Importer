@@ -193,7 +193,14 @@ const ciQueue = (() => {
     let already = 0;
     let updated = 0;
     let unmarked = 0;
-    for (const { link: url, state } of listed.cards) {
+    let blocked = 0;
+    // Only profile imports: a card pasted on its own is imported whatever its tags
+    const blacklist = new Set(ciSettings.get().profileTagBlacklist.map(ciCore.normTag).filter(Boolean));
+    for (const { link: url, state, tags } of listed.cards) {
+      if (blacklist.size && tags?.some((t) => blacklist.has(t))) {
+        blocked++;
+        continue;
+      }
       // Cards you have: skipped if Botbooru has them as downloaded and unchanged, otherwise checked
       // (changed since, or imported without your login so Botbooru doesn't know)
       const cardKey = ciCore.normalizeSource(url);
@@ -214,6 +221,7 @@ const ciQueue = (() => {
       updated && `${updated} updated since you got ${updated === 1 ? "it" : "them"}`,
       unmarked && `${unmarked} you have to compare`,
       owned && `${owned} already in the library`,
+      blocked && `${blocked} left out by tag`,
       already && `${already} already queued`,
     ].filter(Boolean);
     item.name = listed.name;

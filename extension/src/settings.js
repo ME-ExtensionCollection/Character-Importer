@@ -16,6 +16,8 @@ const ciSettings = (() => {
     botbooruGallery: true,
     // Botbooru usernames of archivist / repost accounts (lowercase)
     botbooruRepostAccounts: [],
+    // Profile imports leave out cards with any of these tags (normalised); pasted card links ignore it
+    profileTagBlacklist: [],
     // Fetch assets also asks Chub about cards saved without a pack
     checkAddedPacks: false,
     expressionsTag: "EXP Downloaded",

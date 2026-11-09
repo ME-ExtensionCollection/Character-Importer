@@ -234,6 +234,13 @@ test("normalizeSource and keysFromCard know Botbooru", () => {
   assert.equal(core.botbooruUploader({ data: { extensions: { botbooru: { full_path: "Jenkitsune/97064" } } } }), "jenkitsune");
 });
 
+test("normTag spells tags the way Botbooru does", () => {
+  assert.equal(core.normTag("  Game Character "), "game_character");
+  assert.equal(core.normTag("NTR"), "ntr");
+  assert.equal(core.normTag("general:cute"), "cute");
+  assert.equal(core.normTag("Writer:SomeOne"), "someone");
+});
+
 test("normName matches names across punctuation, case and spacing", () => {
   assert.equal(core.normName("  Lirael   Sunfire!! "), "lirael sunfire");
   assert.equal(core.normName("LIRAEL-sunfire"), "lirael sunfire");
