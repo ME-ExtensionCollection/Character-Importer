@@ -14,6 +14,8 @@ const ciSettings = (() => {
     localizeAssets: true,
     // Botbooru mini galleries (need a Botbooru login in this browser)
     botbooruGallery: true,
+    // Botbooru usernames of archivist / repost accounts (lowercase)
+    botbooruRepostAccounts: [],
     // Fetch assets also asks Chub about cards saved without a pack
     checkAddedPacks: false,
     expressionsTag: "EXP Downloaded",
@@ -90,5 +92,8 @@ const ciSettings = (() => {
     }
   }
 
-  return Object.freeze({ DEFAULTS, load, get, set, flush });
+  /** Whether a Botbooru uploader is listed as a repost account. */
+  const isRepost = (uploader) => !!uploader && (current?.botbooruRepostAccounts ?? []).includes(String(uploader).toLowerCase());
+
+  return Object.freeze({ DEFAULTS, load, get, set, flush, isRepost });
 })();

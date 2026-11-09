@@ -10,7 +10,9 @@ const ciLib = (() => {
   // Above this many changed characters, page through the whole library instead of fetching one by one
   const BULK_THRESHOLD = 40;
   let index = null; // id -> entry
-  let meta = { updated: 0, generation: null };
+  // Bumped when entries gain fields, so the next refresh rebuilds them all once
+  const SCHEMA = 2;
+  let meta = { updated: 0, generation: null, schema: SCHEMA };
   let refreshing = null;
 
   function entryFor(row) {
@@ -24,6 +26,9 @@ const ciLib = (() => {
       created: Date.parse(row.createdAt ?? "") || 0,
       avatarPath: row.avatarPath ?? null,
       chubId: ext.chub?.id ?? null,
+      obsolete: Array.isArray(ext.char_importer?.obsolete_keys) ? ext.char_importer.obsolete_keys.filter((k) => typeof k === "string") : [],
+      uploader: ciCore.botbooruUploader(data),
+      creator: ciCore.normName(data.creator),
       hasChubPack: ciCore.chubPacks(ext.chub).length > 0,
       fav: ext.fav === true,
     };
@@ -63,7 +68,7 @@ const ciLib = (() => {
     onProgress?.("Reading the library...");
     const { items, generation } = await ciApi.listCatalog((n) => onProgress?.(`Reading the library... ${n}`));
     const live = new Map(items.map((item) => [item.id, item]));
-    if (full) index = {};
+    if (full || meta.schema !== SCHEMA) index = {};
     for (const id of Object.keys(index)) if (!live.has(id)) delete index[id];
 
     const stale = items.filter((item) => !index[item.id] || index[item.id].updatedAt !== item.updatedAt);
@@ -93,7 +98,7 @@ const ciLib = (() => {
         report();
       }, signal);
     }
-    meta = { updated: Date.now(), generation };
+    meta = { updated: Date.now(), generation, schema: SCHEMA };
     await save();
     return index;
   }

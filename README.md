@@ -66,7 +66,27 @@ lists only a creator's few safe-for-work cards, so the import stops and
 says so rather than queueing part of the list.
 
 A card that names another source you already have (such as a Botbooru
-re-upload of a Chub card) is skipped only if it's identical. Creators who
+re-upload of a Chub card) is skipped only if it's identical. The skipped
+link is then recorded on your copy, so later imports, profile imports and
+hiding owned cards know the card from there too. The same goes for cards
+skipped by "Also skip cards with identical content", and for an unchanged
+Botbooru fork of a card you have (skipped as irrelevant; a fork with
+changes is imported and noted as one).
+
+**Botbooru repost accounts** (Tools → Import): archivist accounts that
+repost other people's cards. Their cards still import, since a repost may
+keep images the original lost or come from another source. One that
+differs from a card you have, shares no link with it, but has the same
+name and creator is linked to it as a duplicate, and Flag duplicates
+keeps the author's copy rather than the repost.
+
+**Copies that differ** (Flag duplicates → "Same link, different
+content"): pick the copy to keep (newest non-repost by default) and tick
+"Merge the others into the chosen copy". Their gallery, sprites, tags and
+lorebook links move over, their links are recorded on the kept copy as
+obsolete (still hidden on Chub and Botbooru, never imported or offered as
+an update again), and each is backed up in this browser before it's
+deleted. Creators who
 moved from Chub often updated their cards on Botbooru, so a copy that
 differs is imported and noted as a possible update; Flag duplicates groups
 the two (they share the Chub link) so you can compare or keep both.

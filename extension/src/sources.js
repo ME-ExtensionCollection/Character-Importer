@@ -400,8 +400,8 @@ const ciSources = (() => {
       }
       case "botbooru": {
         // The PNG has the card, avatar and lorebook; the gallery is an asset step (needs a login)
-        const file = await loadBotbooruCard(plan.id, signal);
-        result = { card: file.json, avatarDataUrl: file.avatarDataUrl, botbooruRecorded: file.recorded };
+        const file = await loadBotbooruCard(plan.id, signal, { withPost: true });
+        result = { card: file.json, avatarDataUrl: file.avatarDataUrl, botbooruRecorded: file.recorded, botbooruPost: file.post };
         break;
       }
       default: {
@@ -417,6 +417,7 @@ const ciSources = (() => {
     return {
       type: "character", card: result.card, avatarDataUrl: result.avatarDataUrl ?? null, charx: result.charx ?? null,
       botBrowserSource: botBrowserSource(plan, result), provider: plan.provider, botbooruRecorded: !!result.botbooruRecorded,
+      botbooruPost: result.botbooruPost ?? null,
     };
   }
 
@@ -475,9 +476,22 @@ const ciSources = (() => {
    * counts the download for your account (its "Downloaded" filter and
    * "Only updated" view); otherwise downloaded anonymously, as the card
    * itself is public. The gallery step after it says when the login is missing.
-   * @returns {Promise<{json: object, avatarDataUrl: string|null, recorded: boolean}>} recorded: sent with the login
+   * Also reads the card's page (/post) first when the login works: fork,
+   * uploader and gallery for the import and the gallery step, one request.
+   * @param {{withPost?: boolean}} [options]
+   * @returns {Promise<{json: object, avatarDataUrl: string|null, recorded: boolean, post: object|null}>} recorded: sent with the login
    */
-  async function loadBotbooruCard(id, signal) {
+  async function loadBotbooruCard(id, signal, { withPost = false } = {}) {
+    let post = null;
+    if (withPost) {
+      try {
+        post = await fetchBotbooru(`/post/${encodeURIComponent(id)}`, signal);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // No login: the gallery step says so; anything else just means no fork/uploader details
+        if (!(error instanceof BotbooruAccessError)) marinara.log.warn(`Couldn't read Botbooru post ${id}`, error);
+      }
+    }
     const gap = Date.now() < botbooruSlowUntil ? BOTBOORU_SLOW_GAP_MS : BOTBOORU_GAP_MS;
     const wait = lastBotbooruDownload + gap - Date.now();
     if (wait > 0) await ciNet.sleep(wait, signal);
@@ -503,7 +517,7 @@ const ciSources = (() => {
       lastBotbooruDownload = Date.now();
     }
     if (response.header?.("x-botbooru-pace") === "warn") botbooruSlowUntil = Date.now() + 5 * 60 * 1000;
-    return { ...(await parseCardFile(response)), recorded };
+    return { ...(await parseCardFile(response)), recorded, post };
   }
 
   /** Whether Botbooru has this card down as downloaded by your account (needs the login). */

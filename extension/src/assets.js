@@ -432,10 +432,11 @@ const ciAssets = (() => {
    * gallery, URLs saved before are skipped.
    * @returns {Promise<{added: number, failed: number, data: object}>}
    */
-  async function importBotbooruGallery(charId, data, { signal, onProgress } = {}) {
+  async function importBotbooruGallery(charId, data, { signal, onProgress, post = null } = {}) {
     const postId = botbooruPostId(data);
     if (!postId) return { added: 0, failed: 0, data };
-    const post = await ciSources.fetchBotbooru(`/post/${postId}`, signal);
+    // The import may have read the post already
+    if (String(post?.id ?? "") !== postId) post = await ciSources.fetchBotbooru(`/post/${postId}`, signal);
     const images = Array.isArray(post?.mini_gallery?.images) ? post.mini_gallery.images : [];
     const urls = images
       .filter((img) => !img?.status || img.status === "approved")
@@ -748,7 +749,7 @@ const ciAssets = (() => {
     if (options.localize && botbooruPostId(data) && ciSettings.get().botbooruGallery !== false) {
       await step("botbooruGallery", "Botbooru gallery", async () => {
         try {
-          const result = await importBotbooruGallery(charId, data, { signal, onProgress: (d, t) => onStep?.(`Botbooru gallery ${d} / ${t}`) });
+          const result = await importBotbooruGallery(charId, data, { signal, post: options.botbooruPost, onProgress: (d, t) => onStep?.(`Botbooru gallery ${d} / ${t}`) });
           data = result.data;
           if (result.added) summary.push(`${result.added} Botbooru gallery image${result.added === 1 ? "" : "s"}`);
           if (result.failed) warnings.push(`${result.failed} Botbooru gallery image${result.failed === 1 ? "" : "s"} could not be saved`);

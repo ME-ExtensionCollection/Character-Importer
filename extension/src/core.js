@@ -103,6 +103,12 @@ const ciCore = (() => {
       if (key && !keys.includes(key)) keys.push(key);
     };
     add(ext.char_importer?.source_key);
+    // Other links the same card was found at (an identical copy skipped on import), and links of
+    // differing copies merged into this one (obsolete versions): owned, hidden, never re-imported
+    for (const field of ["also_keys", "obsolete_keys"]) {
+      const list = ext.char_importer?.[field];
+      for (const key of Array.isArray(list) ? list : []) if (typeof key === "string") add(key);
+    }
     if (ext.chub?.full_path) add(normalizeSource(`https://chub.ai/characters/${ext.chub.full_path}`));
     add(keyFromBotBrowserSource(ext.botBrowserSource));
     if (/^\d+$/.test(String(ext.botbooru?.post_id ?? ""))) add(`botbooru:${ext.botbooru.post_id}`);
@@ -138,6 +144,17 @@ const ciCore = (() => {
     "name", "description", "personality", "scenario", "first_mes", "mes_example",
     "system_prompt", "post_history_instructions",
   ];
+
+  /** Name or creator for matching: lowercase, letters and digits only, single spaces. */
+  function normName(value) {
+    return typeof value === "string" ? value.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim() : "";
+  }
+
+  /** Botbooru uploader of a card (lowercase), from extensions.botbooru.full_path ("user/id"). */
+  function botbooruUploader(data) {
+    const path = cardData(data).extensions?.botbooru?.full_path;
+    return typeof path === "string" && path.includes("/") ? path.split("/")[0].toLowerCase() : "";
+  }
 
   function cleanText(value) {
     return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
@@ -406,6 +423,7 @@ const ciCore = (() => {
   }
 
   return Object.freeze({
+    normName, botbooruUploader,
     UUID,
     isValidUrl,
     chubKey,

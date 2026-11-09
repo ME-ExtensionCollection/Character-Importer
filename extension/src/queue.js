@@ -117,10 +117,45 @@ const ciQueue = (() => {
     return { expressions: !!opts.downloadExpressions, localize: !!opts.localizeAssets, lorebooks: !!opts.downloadLorebooks, links: true };
   }
 
-  /** Name of a library copy that answers to `key` and has this content hash. */
-  function sameCopy(key, hash) {
-    const entry = Object.values(ciLib.get()).find((e) => e.hash === hash && e.keys?.includes(key));
+  /** Name of the library character that keeps `key` as an obsolete (merged-away) version, if any. */
+  function obsoleteOwner(key) {
+    const entry = Object.values(ciLib.get()).find((e) => e.obsolete?.includes(key));
     return entry ? entry.name || "a character" : null;
+  }
+
+  /** The library copy that answers to `key` and has this content hash: {id, name}. */
+  function sameCopy(key, hash) {
+    const found = Object.entries(ciLib.get()).find(([, e]) => e.hash === hash && e.keys?.includes(key));
+    return found ? { id: found[0], name: found[1].name || "a character" } : null;
+  }
+
+  /**
+   * Records another link on a library character (char_importer.also_keys),
+   * so the duplicate checks, profile imports and the owned lists know the
+   * card from there too. Returns whether it was saved.
+   */
+  async function linkKey(charId, key, existing) {
+    try {
+      const row = await ciApi.getCharacter(charId);
+      if (!row) return false;
+      const marker = row.data?.extensions?.char_importer ?? {};
+      const also = Array.isArray(marker.also_keys) ? marker.also_keys : [];
+      if (also.includes(key) || marker.source_key === key) return true;
+      const pinned = {
+        ...marker,
+        // Pinned, so what it matches doesn't change with later edits
+        content_hash: ciCore.savedHash(row.data) || ciCore.contentHash(row.data, { ignoreSaved: true }) || undefined,
+        also_keys: [...also, key],
+      };
+      const updated = await ciApi.updateCharacter(charId, { extensions: { char_importer: pinned } }, { skipVersionSnapshot: true });
+      await ciLib.put(updated ?? (await ciApi.getCharacter(charId)));
+      existing.keys.set(key, charId);
+      ciLib.publishOwnedSoon();
+      return true;
+    } catch (error) {
+      marinara.log.warn(`Could not record ${key} on character ${charId}`, error);
+      return false;
+    }
   }
 
   /** Whether Botbooru has the card as downloaded by you; null when it can't be asked (says why once). */
@@ -161,8 +196,10 @@ const ciQueue = (() => {
     for (const { link: url, state } of listed.cards) {
       // Cards you have: skipped if Botbooru has them as downloaded and unchanged, otherwise checked
       // (changed since, or imported without your login so Botbooru doesn't know)
-      const have = item.opts.preventDuplicates && existing.keys.has(ciCore.normalizeSource(url));
-      if (have && state === "current") owned++;
+      const cardKey = ciCore.normalizeSource(url);
+      const have = item.opts.preventDuplicates && existing.keys.has(cardKey);
+      // Merged away as obsolete: never queued again, even when Botbooru says it changed
+      if (have && (state === "current" || obsoleteOwner(cardKey))) owned++;
       else if (queued.has(url)) already++;
       else {
         if (have && state === "updated") updated++;
@@ -244,6 +281,12 @@ const ciQueue = (() => {
     // recheck: download it anyway and compare with the library copy (a Botbooru card that may have
     // changed, or that Botbooru doesn't know you have because it was imported without your login)
     let recheck = !!item.recheck;
+    // A link merged away as an obsolete version is never imported or rechecked again
+    const obsolete = opts.preventDuplicates ? obsoleteOwner(key) : null;
+    if (obsolete) {
+      finish("skipped", `Obsolete copy of ${obsolete}`);
+      return "link";
+    }
     if (opts.preventDuplicates && existing.keys.has(key) && !recheck) {
       const known = plan.provider === "botbooru" ? await botbooruKnows(plan.id, signal, setStep) : null;
       if (known !== false) {
@@ -264,6 +307,23 @@ const ciQueue = (() => {
     }
 
     const hash = ciCore.contentHash(loaded.card);
+    const post = loaded.botbooruPost;
+    const marked = plan.provider !== "botbooru" ? ""
+      : loaded.botbooruRecorded ? "; marked as downloaded on Botbooru" : "; not marked on Botbooru (no login)";
+
+    // A Botbooru fork of a card you have: unchanged ones are irrelevant (skipped, linked to it)
+    let forkNote = null;
+    const parentId = String(post?.fork_of_post_id ?? "");
+    if (opts.preventDuplicates && /^\d+$/.test(parentId) && existing.keys.has(`botbooru:${parentId}`)) {
+      const parentKey = `botbooru:${parentId}`;
+      const copy = hash ? sameCopy(parentKey, hash) : null;
+      if (copy) {
+        const linked = (await linkKey(copy.id, key, existing)) ? "; link added to it" : "";
+        finish("skipped", `Unchanged fork of ${copy.name}${linked}${marked}`);
+        return "content";
+      }
+      forkNote = `fork of ${lookup(existing.keys, parentKey)}, with changes`;
+    }
 
     // The card can name other sources too, e.g. a Botbooru re-upload of a Chub card. Only an
     // identical copy is skipped: creators who moved sites often updated the card on the new one.
@@ -275,22 +335,44 @@ const ciQueue = (() => {
       const same = hash ? others.map((k) => [k, sameCopy(k, hash)]).find(([, copy]) => copy) : null;
       if (same) {
         const [k, copy] = same;
-        const marked = recheck && plan.provider === "botbooru"
-          ? (loaded.botbooruRecorded ? "; marked as downloaded on Botbooru" : "; not marked on Botbooru (no login)")
-          : "";
-        finish("skipped", `${k === key ? "Duplicate link, same as your copy" : `Same card already in the library from ${sourceName(k)}`} (${copy})${marked}`);
+        // A copy from another source learns this link, so it isn't downloaded again next time
+        const linked = k !== key && (await linkKey(copy.id, key, existing)) ? "; link added to it" : "";
+        finish("skipped", `${k === key ? "Duplicate link, same as your copy" : `Same card already in the library from ${sourceName(k)}`} (${copy.name})${linked}${marked}`);
         return k === key ? "link" : "content";
       }
       if (others.length) olderCopy = `${lookup(existing.keys, others[0])} from ${sourceName(others[0])}`;
     }
 
     if (opts.preventDuplicates && opts.contentCheck && hash && existing.hashes.has(hash)) {
-      finish("skipped", `Identical card already in the library (${lookup(existing.hashes, hash)})`);
+      // Linked like the other identical copies, so this link is known (and hidden) from now on
+      const linked = (await linkKey(existing.hashes.get(hash), key, existing)) ? "; link added to it" : "";
+      finish("skipped", `Identical card already in the library (${lookup(existing.hashes, hash)})${linked}${marked}`);
       return "content";
     }
 
+    // A repost account's card that differs from yours and shares no link: matched by name and
+    // creator and linked as a duplicate (still imported: it may keep images the original lost)
+    const alsoKeys = [];
+    let repostNote = null;
+    const uploader = String(post?.uploader_name ?? "").toLowerCase() || ciCore.botbooruUploader(loaded.card);
+    if (plan.provider === "botbooru" && !olderCopy && ciSettings.isRepost(uploader)) {
+      const data = ciCore.cardData(loaded.card);
+      const name = ciCore.normName(data.name);
+      const creator = ciCore.normName(data.creator);
+      const match = name && creator ? Object.values(ciLib.get()).find((e) => e.creator === creator && ciCore.normName(e.name) === name) : null;
+      if (match?.keys?.length) {
+        alsoKeys.push(match.keys[0]);
+        repostNote = `repost by ${uploader}, linked to ${match.name || "a character"} as a duplicate; see Flag duplicates`;
+      } else if (match) {
+        repostNote = `repost by ${uploader}, same name and creator as ${match.name || "a character"}`;
+      }
+    }
+
     setStep("Importing");
-    const marker = { v: 1, source_key: key, source_url: url, content_hash: hash || undefined, imported_at: new Date().toISOString() };
+    const marker = {
+      v: 1, source_key: key, source_url: url, content_hash: hash || undefined, imported_at: new Date().toISOString(),
+      ...(alsoKeys.length ? { also_keys: alsoKeys } : {}),
+    };
     let card = ciSources.withMarker(loaded.card, marker);
     const importOptions = {
       importEmbeddedLorebook: opts.importEmbeddedLorebook !== false,
@@ -337,7 +419,7 @@ const ciQueue = (() => {
     for (const k of entry.keys) if (!existing.keys.has(k)) existing.keys.set(k, row.id);
     ciApi.refreshMarinara(["characters", "lorebooks"]);
 
-    const assets = await ciAssets.importAssets(row.id, row.data, { ...assetOptions(opts), signal, onStep: setStep });
+    const assets = await ciAssets.importAssets(row.id, row.data, { ...assetOptions(opts), signal, onStep: setStep, botbooruPost: post });
     ciApi.refreshMarinara(["characters", "sprites", "gallery", "lorebooks"]);
     const name = result.name || row.data.name;
     if (merged) {
@@ -346,7 +428,9 @@ const ciQueue = (() => {
     }
     assets.warnings.push(...tagNotes);
     // Flag duplicates groups the two (they share the source link) to compare or merge
+    if (forkNote) assets.summary.push(forkNote);
     if (olderCopy) assets.summary.push(`differs from ${olderCopy}, maybe an update; see Flag duplicates`);
+    if (repostNote) assets.summary.push(repostNote);
     const extra = assets.summary.length ? ` (${assets.summary.join(", ")})` : "";
     if (assets.warnings.length) finish("warn", `Imported ${name}${extra}; ${assets.warnings.join("; ")}`);
     else finish("done", `Imported ${name}${extra}`);

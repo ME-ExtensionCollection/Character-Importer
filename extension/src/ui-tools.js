@@ -78,6 +78,20 @@ const ciToolsUi = (() => {
         setting("Save Botbooru galleries (needs a Botbooru login in this browser)", "botbooruGallery", "Read through the companion userscript with your Botbooru login. Part of \"Save gallery & card images locally\"."),
       ),
       section(
+        "Botbooru repost accounts",
+        h("p", {
+          class: "ci-muted",
+          text: "Archivist accounts that repost other people's cards, one username per line. Their cards still import (a repost can keep images the original lost), but one that differs from a card you have with the same name and creator is linked to it as a duplicate, and Flag duplicates keeps the author's copy rather than the repost.",
+        }),
+        (() => {
+          const box = h("textarea", { class: "ci-input", rows: 4, spellcheck: false, value: ciSettings.get().botbooruRepostAccounts.join("\n"), placeholder: "username" });
+          box.addEventListener("change", () =>
+            ciSettings.set({ botbooruRepostAccounts: [...new Set(box.value.split(/\r?\n/).map((l) => l.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))] }),
+          );
+          return box;
+        })(),
+      ),
+      section(
         "Tags this importer adds",
         textSetting("Characters with a downloaded expression pack", "expressionsTag", "empty = no tag"),
         textSetting("Characters whose notes link extra assets", "assetLinksTag", "empty = no tag"),
@@ -144,6 +158,34 @@ const ciToolsUi = (() => {
     }
     const remove = new Set(sets.flatMap((s) => s.remove.map((c) => c.id)));
     const opts = { merge: true, del: true, tag: true };
+    // Groups whose copies differ: which copy to keep, and whether to merge the others into it
+    const newest = (list) => [...list].sort((a, b) => (b.created ?? 0) - (a.created ?? 0))[0];
+    const differingChoice = differing.map((g) => ({
+      keeper: (g.find((c) => c.blocker) ?? newest(g.filter((c) => !c.repost)) ?? newest(g)).id,
+      merge: false,
+    }));
+    const differingGroup = (g, i) => {
+      const choice = differingChoice[i];
+      const name = `ci-keep-${i}`;
+      return h(
+        "div",
+        { class: "ci-dupe-set" },
+        g.map((c) =>
+          h(
+            "label",
+            { class: "ci-dupe-copy" },
+            h("input", { type: "radio", name, checked: c.id === choice.keeper, onChange: () => (choice.keeper = c.id) }),
+            h("span", { text: ` ${c.name || c.id}` }),
+            h("span", {
+              class: "ci-muted",
+              text: [c.created ? ` added ${new Date(c.created).toLocaleString()}` : "", c.repost ? " · repost" : "", c.blocker ? ` · stays: ${c.blocker}` : ""].join(""),
+            }),
+          ),
+        ),
+        checkbox("Merge the others into the chosen copy (kept as obsolete)", false, (v) => (choice.merge = v),
+          "Their gallery, sprites, tags and lorebook links move to the chosen copy; their links are kept on it as obsolete versions (still hidden, never imported again); each is backed up in this browser, then deleted"),
+      );
+    };
     const copyLine = (c, role) =>
       h("div", { class: "ci-dupe-copy" },
         role === "remove"
@@ -163,8 +205,11 @@ const ciToolsUi = (() => {
       differing.length
         ? section(
             `Same link, different content (${differing.length})`,
-            h("p", { class: "ci-muted", text: "Probably different versions of a card. Nothing is deleted." }),
-            h("div", { class: "ci-dupe-list" }, differing.map((g) => h("div", { class: "ci-dupe-set" }, g.map((c) => h("div", { class: "ci-dupe-copy", text: c.name || c.id }))))),
+            h("p", {
+              class: "ci-muted",
+              text: "Probably different versions of a card, or a repost of it. The chosen copy (newest, not a repost, by default) is kept. Nothing is deleted unless you tick merge for a group.",
+            }),
+            h("div", { class: "ci-dupe-list" }, differing.map(differingGroup)),
             ciSettings.get().duplicateTag ? checkbox(`Tag them "${ciSettings.get().duplicateTag}"`, opts.tag, (v) => (opts.tag = v)) : null,
           )
         : null,
@@ -187,12 +232,24 @@ const ciToolsUi = (() => {
         onClick: async () => {
           const chosen = sets.map((s) => ({ keeper: s.keeper, remove: s.remove.filter((c) => remove.has(c.id)) })).filter((s) => s.remove.length);
           const n = chosen.reduce((sum, s) => sum + s.remove.length, 0);
-          if (opts.del && n && !(await confirm("Delete duplicates?", `Merge and delete ${plural(n, "copy", "copies")}? Each is backed up in this browser first (see the Backups tab).`, `Merge & delete ${n}`, { kind: "danger" }))) return;
+          const obsoleteSets = differing
+            .map((g, i) => ({ g, choice: differingChoice[i] }))
+            .filter(({ choice }) => choice.merge)
+            .map(({ g, choice }) => ({ keeper: g.find((c) => c.id === choice.keeper), remove: g.filter((c) => c.id !== choice.keeper && !c.blocker) }))
+            .filter((s) => s.keeper && s.remove.length);
+          const nObsolete = obsoleteSets.reduce((sum, s) => sum + s.remove.length, 0);
+          const toDelete = (opts.del ? n : 0) + nObsolete;
+          if (toDelete) {
+            const parts = [opts.del && n ? `${plural(n, "identical copy", "identical copies")}` : "", nObsolete ? `${plural(nObsolete, "differing copy", "differing copies")} (their links kept as obsolete)` : ""].filter(Boolean);
+            if (!(await confirm("Delete duplicates?", `Merge and delete ${parts.join(" and ")}? Each is backed up in this browser first (see the Backups tab).`, `Merge & delete ${toDelete}`, { kind: "danger" }))) return;
+          }
+          // Groups merged as obsolete aren't tagged
+          const untagged = differing.filter((g, i) => !(differingChoice[i].merge && obsoleteSets.some((s) => s.keeper && g.includes(s.keeper))));
           d.setBusy(true);
           try {
-            const result = await ciDupes.cleanup(chosen, { deleteCopies: opts.del, tagDiffering: opts.tag ? differing : [], onStatus: (t) => (progress.textContent = t) });
+            const result = await ciDupes.cleanup(chosen, { deleteCopies: opts.del, obsoleteSets, tagDiffering: opts.tag ? untagged : [], onStatus: (t) => (progress.textContent = t) });
             d.close(true);
-            const parts = [opts.del ? `${result.deleted} deleted` : `${result.merged} merged`];
+            const parts = [`${result.merged} merged`, result.deleted ? `${result.deleted} deleted` : ""].filter(Boolean);
             if (result.tagged) parts.push(`${result.tagged} tagged`);
             toast(`Duplicates: ${parts.join(", ")}.`, result.problems.length ? "warn" : "success");
             if (result.problems.length) {

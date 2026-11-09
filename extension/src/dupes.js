@@ -54,15 +54,16 @@ const ciDupes = (() => {
     onStatus?.("Scanning the library...");
     await ciLib.refresh({ onProgress: onStatus });
     const index = ciLib.get();
-    const entries = Object.entries(index).map(([id, e]) => ({ id, name: e.name, keys: e.keys, hash: e.hash, created: e.created }));
+    const entries = Object.entries(index).map(([id, e]) => ({ id, name: e.name, keys: e.keys, hash: e.hash, created: e.created, uploader: e.uploader }));
     onStatus?.("Looking for duplicates...");
     const { identical, differing } = ciCore.findDuplicateSets(entries);
     onStatus?.("Checking chats and groups...");
     const blockers = await loadBlockers();
-    const toCopy = (e) => ({ id: e.id, name: e.name, created: e.created, blocker: blockers.get(e.id) ?? null });
+    const toCopy = (e) => ({ id: e.id, name: e.name, created: e.created, blocker: blockers.get(e.id) ?? null, repost: ciSettings.isRepost(e.uploader) });
     const sets = identical.map((group) => {
       const copies = group.map(toCopy);
-      const keeper = copies.find((c) => c.blocker) ?? copies[0];
+      // Copies in chats or groups stay; otherwise the author's copy rather than a repost account's
+      const keeper = copies.find((c) => c.blocker) ?? copies.find((c) => !c.repost) ?? copies[0];
       const others = copies.filter((c) => c !== keeper);
       return { keeper, remove: others.filter((c) => !c.blocker), kept: others.filter((c) => c.blocker) };
     });
@@ -214,14 +215,36 @@ const ciDupes = (() => {
 
   const deleteBackup = (key) => ciIdb.del(key, "backups");
 
+  /**
+   * Records a merged-away copy's links on the keeper as obsolete versions:
+   * still owned (hidden on Chub/Botbooru), never imported or rechecked again.
+   * Links the keeper itself answers to are left alone.
+   */
+  async function markObsolete(from, toId) {
+    const to = await ciApi.getCharacter(toId);
+    if (!to) return;
+    const own = new Set(ciCore.keysFromCard(to.data));
+    const marker = to.data?.extensions?.char_importer ?? {};
+    const before = Array.isArray(marker.obsolete_keys) ? marker.obsolete_keys : [];
+    const added = ciCore.keysFromCard(from.data).filter((k) => !own.has(k) && !before.includes(k) && !k.startsWith("chublore:"));
+    if (!added.length) return;
+    const pinned = {
+      ...marker,
+      content_hash: ciCore.savedHash(to.data) || ciCore.contentHash(to.data, { ignoreSaved: true }) || undefined,
+      obsolete_keys: [...before, ...added],
+    };
+    await ciApi.updateCharacter(toId, { extensions: { char_importer: pinned } }, { skipVersionSnapshot: true });
+  }
+
   // ── Cleanup ──
 
   /**
    * @param {{keeper: object, remove: object[]}[]} sets from find(), after the user unticked what to keep
-   * @param {{deleteCopies?: boolean, tagDiffering?: object[][]}} options
+   * @param {{deleteCopies?: boolean, tagDiffering?: object[][], obsoleteSets?: {keeper: object, remove: object[]}[]}} options
+   *   obsoleteSets: groups whose copies differ, merged into the chosen keeper; the removed copies' links become obsolete
    * @returns {Promise<{deleted: number, merged: number, tagged: number, problems: string[]}>}
    */
-  async function cleanup(sets, { deleteCopies = true, tagDiffering = [], onStatus } = {}) {
+  async function cleanup(sets, { deleteCopies = true, tagDiffering = [], obsoleteSets = [], onStatus } = {}) {
     if (ciAssets.currentJob() || ciQueue.isRunning()) throw new Error("Wait for the import queue and asset jobs to finish first");
     const problems = [];
     let deleted = 0;
@@ -229,9 +252,10 @@ const ciDupes = (() => {
     const deletedIds = [];
     let blockers = await loadBlockers();
     let n = 0;
-    const total = sets.reduce((sum, s) => sum + s.remove.length, 0);
+    const all = [...sets.map((set) => ({ set, obsolete: false })), ...obsoleteSets.map((set) => ({ set, obsolete: true }))];
+    const total = all.reduce((sum, { set }) => sum + set.remove.length, 0);
 
-    for (const set of sets) {
+    for (const { set, obsolete } of all) {
       for (const copy of set.remove) {
         n++;
         onStatus?.(`Merging ${n} / ${total}: ${copy.name}`);
@@ -244,8 +268,10 @@ const ciDupes = (() => {
           const renamed = await mergeGallery(from.id, to.id);
           await mergeSprites(from.id, to.id);
           await mergeCard(from, to, renamed);
+          if (obsolete) await markObsolete(from, to.id);
           merged++;
-          if (!deleteCopies) continue;
+          // A differing copy is always removed once merged: its links now point at the keeper
+          if (!deleteCopies && !obsolete) continue;
           await backup(from.id, copy.name);
           // Chats may have started since the scan
           blockers = await loadBlockers();

@@ -225,4 +225,28 @@ test("normalizeSource and keysFromCard know Botbooru", () => {
   const keys = plain(core.keysFromCard({ extensions: { botbooru: { post_id: 97064 }, chub: { full_path: "DerpyOrangeCat/n-o-v-a-631623cf289c" } } }));
   assert.ok(keys.includes("botbooru:97064"));
   assert.ok(keys.includes("chub:derpyorangecat/n-o-v-a-631623cf289c"));
+  // Links recorded on a copy found identical elsewhere
+  const linked = plain(core.keysFromCard({ extensions: { char_importer: { source_key: "chub:a/b", also_keys: ["botbooru:5", 7] } } }));
+  assert.deepEqual(linked, ["chub:a/b", "botbooru:5"]);
+  // Obsolete (merged-away) links still count
+  const merged = plain(core.keysFromCard({ extensions: { char_importer: { source_key: "chub:a/b", obsolete_keys: ["botbooru:9"] } } }));
+  assert.deepEqual(merged, ["chub:a/b", "botbooru:9"]);
+  assert.equal(core.botbooruUploader({ data: { extensions: { botbooru: { full_path: "Jenkitsune/97064" } } } }), "jenkitsune");
+});
+
+test("normName matches names across punctuation, case and spacing", () => {
+  assert.equal(core.normName("  Lirael   Sunfire!! "), "lirael sunfire");
+  assert.equal(core.normName("LIRAEL-sunfire"), "lirael sunfire");
+  assert.equal(core.normName(undefined), "");
+});
+
+test("a repost carrying the original's key as also_keys is grouped with it", () => {
+  const { identical, differing } = plain(
+    core.findDuplicateSets([
+      { id: "orig", keys: ["chub:author/card"], hash: "h1", created: 1 },
+      { id: "repost", keys: ["botbooru:5", "chub:author/card"], hash: "h2", created: 2 },
+    ]),
+  );
+  assert.equal(identical.length, 0);
+  assert.deepEqual(differing.map((g) => g.map((e) => e.id)), [["orig", "repost"]]);
 });
