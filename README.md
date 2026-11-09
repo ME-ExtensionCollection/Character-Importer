@@ -177,8 +177,9 @@ through a temporary gallery copy.
 
 ## Turning Marinara off when the queue finishes
 
-While the queue runs, its panel has **Turn off Marinara when done** (for
-that session only). When the queue finishes on its own, not when you stop
+While the queue runs and the watcher script below is running, the queue
+panel has **Turn off Marinara when done** (for that session only; without
+a watcher it isn't shown). When the queue finishes on its own, not when you stop
 it, the panel counts down 30 seconds (with Cancel), then writes a request
 to Char Importer's storage on the server. Marinara can't stop itself from
 the page, so a small script on the server's computer does the stopping:
@@ -189,7 +190,9 @@ node /path/to/CharImporter/tools/shutdown-watcher.mjs \
   "https://127.0.0.1:7860/api/personal-extensions/<id>/storage"
 ```
 
-It uses no packages and writes nothing. It checks every 10 seconds, and
+It uses no packages. Besides a heartbeat in the same storage (every 30
+seconds, cleared when it exits), which is how the queue knows to offer the
+checkbox, it writes nothing. It checks every 10 seconds, and
 on a request made after it started finds the process listening on the
 address's port (Linux, or wherever `lsof` exists) and sends it SIGINT (as
 Ctrl+C does, so saves are flushed), then SIGTERM if it's still running a

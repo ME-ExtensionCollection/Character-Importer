@@ -23,8 +23,10 @@
 //
 // <sync address> is the one under Tools > Companion userscript > "Chub in
 // another browser". Use 127.0.0.1 as its host so no login is needed.
-// Only requests made after this script started count. The script uses no
-// packages and writes nothing; the command runs exactly as if typed there.
+// Only requests made after this script started count. While it runs it
+// writes a heartbeat (shutdownWatcher) to the same storage, so the queue only
+// offers the checkbox when a watcher is listening. It uses no packages and
+// writes nothing else.
 
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, readdirSync, readlinkSync } from "node:fs";
@@ -78,10 +80,14 @@ const isLocal = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
 const startedAt = Date.now();
 const log = (text) => console.log(`[shutdown-watcher ${new Date().toLocaleTimeString()}] ${text}`);
 
-function readStorage() {
+function readStorage(patch) {
   return new Promise((resolve, reject) => {
     const lib = url.protocol === "https:" ? https : http;
-    const req = lib.get(url, { headers: { Accept: "application/json" }, rejectUnauthorized: !(isLocal || insecure), timeout: 15_000 }, (res) => {
+    const body = patch ? JSON.stringify(patch) : null;
+    const headers = { Accept: "application/json" };
+    // A script call, not a browser: Marinara's CSRF check wants this header for writes
+    if (body) Object.assign(headers, { "Content-Type": "application/json", "x-marinara-csrf": "1" });
+    const req = lib.request(url, { method: body ? "PATCH" : "GET", headers, rejectUnauthorized: !(isLocal || insecure), timeout: 15_000 }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => (body += chunk));
@@ -96,6 +102,30 @@ function readStorage() {
     });
     req.on("timeout", () => req.destroy(new Error("No answer")));
     req.on("error", reject);
+    req.end(body ?? undefined);
+  });
+}
+
+// Heartbeat: the queue panel shows "Turn off Marinara when done" only while it's fresh
+const BEAT_MS = 30_000;
+let lastBeat = 0;
+async function beat(on = true) {
+  try {
+    await readStorage({ shutdownWatcher: { at: on ? Date.now() : 0, pid: process.pid } });
+    lastBeat = Date.now();
+  } catch (error) {
+    if (!on) return;
+    throw error;
+  }
+}
+
+// Ctrl+C on the watcher: take the heartbeat down so the checkbox goes away
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, async () => {
+    if (stopping) return;
+    await beat(false);
+    // With a child, Ctrl+C reached Marinara too; its exit ends the watcher
+    if (!child) process.exit(0);
   });
 }
 
@@ -162,7 +192,7 @@ if (command.length) {
     process.exit(1);
   });
   // Marinara stopped some other way (Ctrl+C in this terminal reaches it too): nothing left to watch
-  childExited.then((result) => {
+  childExited.then(async (result) => {
     if (!stopping) {
       log(`Marinara exited (${result}); stopping the watcher.`);
       process.exit(0);
@@ -203,6 +233,7 @@ async function stopMarinara() {
     const name = processName(pid);
     if (name && !/node/i.test(name)) log(`Note: the process on port ${port} is "${name}", not node.`);
   }
+  await beat(false);
   log(`Stopping Marinara (pid ${pid}) with SIGINT...`);
   try {
     process.kill(pid, "SIGINT");
@@ -237,6 +268,7 @@ async function check() {
   }
   try {
     const value = await readStorage();
+    if (Date.now() - lastBeat >= BEAT_MS) await beat();
     if (lastError) log("Reached Marinara again.");
     lastError = "";
     const at = Number(value?.shutdownRequest?.at) || 0;

@@ -9,7 +9,10 @@ const ciQueue = (() => {
   /** @typedef {{url: string, opts: object, state: "pending"|"running"|"done"|"warn"|"skipped"|"failed", note: string, interrupted?: boolean, charId?: string, name?: string}} QueueItem */
   // shutdown: "Turn off Marinara when done" for this session only (never saved).
   // shutdownAt: when the countdown ends; shutdownSent: the request went to the watcher script
-  const queue = { items: [], running: false, stop: false, paused: false, step: "", shutdown: false, shutdownAt: 0, shutdownSent: false };
+  // watcher: the shutdown watcher script's heartbeat is fresh (it's listening)
+  const queue = { items: [], running: false, stop: false, paused: false, step: "", shutdown: false, shutdownAt: 0, shutdownSent: false, watcher: false };
+  // The watcher beats every 30 s; allow for a missed one
+  const WATCHER_FRESH_MS = 75_000;
   const SHUTDOWN_GRACE_MS = 30_000;
   let shutdownTimer = 0;
   let stoppedByUser = false;
@@ -81,6 +84,21 @@ const ciQueue = (() => {
     return { added, alreadyQueued: links.length - added, joined };
   }
 
+  /** Reads the shutdown watcher's heartbeat from this extension's storage. */
+  async function checkWatcher() {
+    try {
+      const at = Number((await marinara.storage.get())?.shutdownWatcher?.at) || 0;
+      const alive = Date.now() - at < WATCHER_FRESH_MS;
+      if (alive !== queue.watcher) {
+        queue.watcher = alive;
+        notify();
+      }
+    } catch (error) {
+      marinara.log.warn("Could not check for the shutdown watcher", error);
+    }
+    return queue.watcher;
+  }
+
   /** Arms or disarms "Turn off Marinara when done". */
   function setShutdown(on) {
     queue.shutdown = !!on;
@@ -109,7 +127,8 @@ const ciQueue = (() => {
         await marinara.storage.patch({ shutdownRequest: { at: Date.now() } });
         queue.shutdownSent = true;
         queue.shutdown = false;
-        ciDom.toast("Asked the shutdown watcher to turn Marinara off. If it isn't running, nothing happens.", "info");
+        const alive = await checkWatcher();
+        ciDom.toast(alive ? "Asked the shutdown watcher to turn Marinara off." : "Asked to turn Marinara off, but no shutdown watcher has been seen lately, so it may stay on.", alive ? "info" : "warn");
       } catch (error) {
         marinara.log.error("Could not send the shutdown request", error);
         ciDom.toast(`Couldn't ask to turn Marinara off: ${ciNet.describe(error)}`, "error");
@@ -578,5 +597,5 @@ const ciQueue = (() => {
     listeners.clear();
   }
 
-  return Object.freeze({ dispose, subscribe, restore, add, stopAfterCurrent, abort, resume, dismiss, clearFinished, isRunning, get, setShutdown, cancelShutdown });
+  return Object.freeze({ dispose, subscribe, restore, add, stopAfterCurrent, abort, resume, dismiss, clearFinished, isRunning, get, setShutdown, cancelShutdown, checkWatcher });
 })();

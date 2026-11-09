@@ -12,6 +12,7 @@ const ciQueueUi = (() => {
   let unsubscribe = null;
   let frame = 0;
   let tick = 0; // redraws the shutdown countdown every second
+  let watcherPoll = 0; // checks for the shutdown watcher while the queue is active
 
   function ensure() {
     if (panel?.isConnected) return panel;
@@ -117,13 +118,24 @@ const ciQueueUi = (() => {
       );
     } else if (q.shutdownSent) {
       shutdownRow = h("div", { class: "ci-row ci-queue-shutdown ci-muted", text: "Asked the shutdown watcher to turn Marinara off." });
-    } else if (q.running || q.paused) {
+    } else if ((q.running || q.paused) && (q.watcher || q.shutdown)) {
+      // Only offered while tools/shutdown-watcher.mjs is running (its heartbeat), or once ticked
       shutdownRow = h(
         "div",
         { class: "ci-row ci-queue-shutdown" },
         checkbox("Turn off Marinara when done", q.shutdown, (v) => ciQueue.setShutdown(v),
-          "When the queue finishes on its own (not when you stop it), waits 30 s, then asks the shutdown watcher script to stop Marinara. Needs tools/shutdown-watcher.mjs running on the server's computer; see Tools → Companion userscript. Only for this session."),
+          "When the queue finishes on its own (not when you stop it), waits 30 s, then asks the shutdown watcher script to stop Marinara. Only for this session."),
+        q.shutdown && !q.watcher ? h("span", { class: "ci-warn", text: "The watcher has stopped." }) : null,
       );
+    }
+    // Look for the watcher while the queue is active
+    const active = q.running || q.paused;
+    if (active && !watcherPoll) {
+      void ciQueue.checkWatcher();
+      watcherPoll = setInterval(() => void ciQueue.checkWatcher(), 20_000);
+    } else if (!active && watcherPoll && !counting) {
+      clearInterval(watcherPoll);
+      watcherPoll = 0;
     }
     const remaining = q.running ? [] : q.items.filter(isRemaining);
     if (remaining.length) actions.push(button(`Copy ${remaining.length} remaining`, () => void copyRemaining(remaining), { title: "Copies the links that weren't imported, one per line" }));
@@ -140,7 +152,8 @@ const ciQueueUi = (() => {
     const foot = h("div", { class: "ci-queue-foot" }, summary ? h("span", { class: "ci-muted ci-grow", text: summary }) : h("span", { class: "ci-grow" }), actions);
 
     panel.classList.toggle("is-collapsed", collapsed);
-    panel.replaceChildren(head, list, shutdownRow, foot);
+    // replaceChildren turns null into the text "null"
+    panel.replaceChildren(...[head, list, shutdownRow, foot].filter(Boolean));
     if (list && running) {
       const node = list.querySelector(".ci-state--running");
       node?.scrollIntoView({ block: "nearest" });
@@ -153,6 +166,8 @@ const ciQueueUi = (() => {
     if (frame) cancelAnimationFrame(frame);
     clearInterval(tick);
     tick = 0;
+    clearInterval(watcherPoll);
+    watcherPoll = 0;
     panel?.remove();
     panel = null;
   }
