@@ -175,6 +175,30 @@ DataCat still work (Marinara's server fetches those), and card images are
 saved through Marinara's server. Sprites from blocked hosts are fetched
 through a temporary gallery copy.
 
+## Turning Marinara off when the queue finishes
+
+While the queue runs, its panel has **Turn off Marinara when done** (for
+that session only). When the queue finishes on its own, not when you stop
+it, the panel counts down 30 seconds (with Cancel), then writes a request
+to Char Importer's storage on the server. Marinara can't stop itself from
+the page, so a small script on the server's computer does the stopping:
+
+```sh
+# from any folder, while Marinara runs; the address is under Tools → Companion userscript
+node /path/to/CharImporter/tools/shutdown-watcher.mjs \
+  "https://127.0.0.1:7860/api/personal-extensions/<id>/storage"
+```
+
+It uses no packages and writes nothing. It checks every 10 seconds, and
+on a request made after it started finds the process listening on the
+address's port (Linux, or wherever `lsof` exists) and sends it SIGINT (as
+Ctrl+C does, so saves are flushed), then SIGTERM if it's still running a
+minute later. If Marinara runs in Docker or as another user, give
+`--pid <id>`, or start Marinara through the watcher with
+`--cwd /path/to/Marinara-Engine -- pnpm start`. `--then "systemctl poweroff"` runs a command afterwards. Use
+`127.0.0.1` as the host so no login is needed; its self-signed
+certificate is accepted there (`--insecure` for other hosts).
+
 ## Things that work differently from SillyTavern
 
 - Marinara shows the sprite whose name matches the expression. The first

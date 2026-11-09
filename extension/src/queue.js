@@ -7,7 +7,12 @@ const ciQueue = (() => {
   "use strict";
 
   /** @typedef {{url: string, opts: object, state: "pending"|"running"|"done"|"warn"|"skipped"|"failed", note: string, interrupted?: boolean, charId?: string, name?: string}} QueueItem */
-  const queue = { items: [], running: false, stop: false, paused: false, step: "" };
+  // shutdown: "Turn off Marinara when done" for this session only (never saved).
+  // shutdownAt: when the countdown ends; shutdownSent: the request went to the watcher script
+  const queue = { items: [], running: false, stop: false, paused: false, step: "", shutdown: false, shutdownAt: 0, shutdownSent: false };
+  const SHUTDOWN_GRACE_MS = 30_000;
+  let shutdownTimer = 0;
+  let stoppedByUser = false;
   const listeners = new Set();
   let writeChain = Promise.resolve();
   let controller = null;
@@ -76,14 +81,55 @@ const ciQueue = (() => {
     return { added, alreadyQueued: links.length - added, joined };
   }
 
+  /** Arms or disarms "Turn off Marinara when done". */
+  function setShutdown(on) {
+    queue.shutdown = !!on;
+    if (!on) cancelShutdown();
+    notify();
+  }
+
+  function cancelShutdown() {
+    clearTimeout(shutdownTimer);
+    shutdownTimer = 0;
+    queue.shutdownAt = 0;
+    notify();
+  }
+
+  // After the queue finishes on its own: a grace period to cancel, then the request the
+  // watcher script (tools/shutdown-watcher.mjs) polls for in this extension's storage
+  function startShutdownCountdown() {
+    queue.shutdownAt = Date.now() + SHUTDOWN_GRACE_MS;
+    queue.shutdownSent = false;
+    notify();
+    shutdownTimer = setTimeout(async () => {
+      shutdownTimer = 0;
+      queue.shutdownAt = 0;
+      try {
+        await ciSettings.flush();
+        await marinara.storage.patch({ shutdownRequest: { at: Date.now() } });
+        queue.shutdownSent = true;
+        queue.shutdown = false;
+        ciDom.toast("Asked the shutdown watcher to turn Marinara off. If it isn't running, nothing happens.", "info");
+      } catch (error) {
+        marinara.log.error("Could not send the shutdown request", error);
+        ciDom.toast(`Couldn't ask to turn Marinara off: ${ciNet.describe(error)}`, "error");
+      }
+      notify();
+    }, SHUTDOWN_GRACE_MS);
+  }
+
   function stopAfterCurrent() {
-    if (queue.running) queue.stop = true;
+    if (queue.running) {
+      queue.stop = true;
+      stoppedByUser = true;
+    }
     notify();
   }
 
   /** Stop now: aborts the current download. */
   function abort() {
     queue.stop = true;
+    stoppedByUser = true;
     controller?.abort();
     notify();
   }
@@ -447,6 +493,9 @@ const ciQueue = (() => {
 
   async function run() {
     if (queue.running) return;
+    cancelShutdown();
+    stoppedByUser = false;
+    queue.shutdownSent = false;
     queue.running = true;
     queue.stop = false;
     queue.paused = false;
@@ -510,6 +559,11 @@ const ciQueue = (() => {
       await save();
     }
     ciLib.publishOwnedSoon();
+    // Left to finish on its own: turn Marinara off if asked (not when you stopped it yourself)
+    if (queue.shutdown && !stoppedByUser && !disposed) {
+      await ciLib.publishOwned();
+      startShutdownCountdown();
+    }
     const parts = [];
     if (skippedLinks.length) parts.push(`${skippedLinks.length} duplicate link${skippedLinks.length === 1 ? "" : "s"}`);
     if (skippedContent.length) parts.push(`${skippedContent.length} identical card${skippedContent.length === 1 ? "" : "s"}`);
@@ -518,10 +572,11 @@ const ciQueue = (() => {
 
   function dispose() {
     disposed = true;
+    clearTimeout(shutdownTimer);
     queue.stop = true;
     controller?.abort();
     listeners.clear();
   }
 
-  return Object.freeze({ dispose, subscribe, restore, add, stopAfterCurrent, abort, resume, dismiss, clearFinished, isRunning, get });
+  return Object.freeze({ dispose, subscribe, restore, add, stopAfterCurrent, abort, resume, dismiss, clearFinished, isRunning, get, setShutdown, cancelShutdown });
 })();

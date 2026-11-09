@@ -301,6 +301,14 @@ textarea.ci-input { resize: vertical; font-family: ui-monospace, SFMono-Regular,
   font-size: 0.75rem;
 }
 .ci-queue-foot .ci-btn { padding: 0.25rem 0.625rem; font-size: 0.75rem; }
+.ci-queue-shutdown {
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-top: 1px solid var(--ci-border);
+  font-size: 0.75rem;
+}
+.ci-queue-shutdown .ci-btn { padding: 0.25rem 0.625rem; font-size: 0.75rem; }
 
 .ci-spin { animation: ci-spin 1s linear infinite; }
 @keyframes ci-spin { to { transform: rotate(360deg); } }
@@ -382,3 +390,16 @@ textarea.ci-input { resize: vertical; font-family: ui-monospace, SFMono-Regular,
 .ci-toast--success { border-color: color-mix(in srgb, var(--ci-ok) 50%, transparent); }
 .ci-toast--warn { border-color: color-mix(in srgb, var(--ci-warn) 50%, transparent); }
 .ci-toast--error { border-color: color-mix(in srgb, var(--ci-danger) 60%, transparent); }
+
+.ci-code {
+  margin: 0.25rem 0;
+  padding: 0.5rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid var(--ci-border);
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  user-select: all;
+}

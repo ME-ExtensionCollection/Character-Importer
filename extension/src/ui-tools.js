@@ -747,6 +747,17 @@ const ciToolsUi = (() => {
         })),
       ),
       section(
+        "Turn off Marinara when the queue finishes",
+        h("p", {
+          class: "ci-muted",
+          text:
+            "Marinara can't stop itself from this page, so the queue's \"Turn off Marinara when done\" box asks a small script on the server's computer to do it. " +
+            "Start it with the sync address below (127.0.0.1 as the host) while Marinara is running; it finds Marinara by the port it listens on. --then can run a command afterwards, such as shutting the computer down.",
+        }),
+        h("pre", { class: "ci-code", text: `node <Char Importer folder>/tools/shutdown-watcher.mjs "${ciLib.syncAddress().replace(/\/\/[^/:]+/, "//127.0.0.1")}"` }),
+        h("p", { class: "ci-muted", text: "Run it from any folder; it uses no packages and installs nothing. If Marinara runs in Docker or as another user, give --pid <id>, or start Marinara through the watcher instead: --cwd <Marinara folder> -- pnpm start." }),
+      ),
+      section(
         "Chub in another browser",
         h("p", {
           class: "ci-muted",

@@ -4,13 +4,14 @@
 const ciQueueUi = (() => {
   "use strict";
 
-  const { h, icon, button, plural, toast } = ciDom;
+  const { h, icon, button, checkbox, plural, toast } = ciDom;
   const ICONS = { pending: "clock", running: "loader", done: "check", warn: "alert", skipped: "skip", failed: "fail" };
   let panel = null;
   let hidden = true;
   let collapsed = false;
   let unsubscribe = null;
   let frame = 0;
+  let tick = 0; // redraws the shutdown countdown every second
 
   function ensure() {
     if (panel?.isConnected) return panel;
@@ -61,7 +62,7 @@ const ciQueueUi = (() => {
     frame = 0;
     const q = ciQueue.get();
     if (!panel) return;
-    panel.hidden = hidden || !q.items.length;
+    panel.hidden = hidden || (!q.items.length && !(q.shutdownAt > Date.now()));
     if (hidden) return;
 
     const counts = {};
@@ -99,6 +100,31 @@ const ciQueueUi = (() => {
       .map((s) => `${counts[s]} ${{ done: "done", warn: "with warnings", skipped: "skipped", failed: "failed" }[s]}`)
       .join(" · ");
     const actions = [];
+    // Turn off Marinara when done (this session only; tools/shutdown-watcher.mjs does the stopping)
+    const counting = q.shutdownAt > Date.now();
+    if (counting && !tick) tick = setInterval(schedule, 1000);
+    if (!counting && tick) {
+      clearInterval(tick);
+      tick = 0;
+    }
+    let shutdownRow = null;
+    if (counting) {
+      shutdownRow = h(
+        "div",
+        { class: "ci-row ci-queue-shutdown" },
+        h("strong", { class: "ci-grow", text: `Turning Marinara off in ${Math.ceil((q.shutdownAt - Date.now()) / 1000)} s` }),
+        button("Cancel", () => ciQueue.cancelShutdown(), { kind: "primary" }),
+      );
+    } else if (q.shutdownSent) {
+      shutdownRow = h("div", { class: "ci-row ci-queue-shutdown ci-muted", text: "Asked the shutdown watcher to turn Marinara off." });
+    } else if (q.running || q.paused) {
+      shutdownRow = h(
+        "div",
+        { class: "ci-row ci-queue-shutdown" },
+        checkbox("Turn off Marinara when done", q.shutdown, (v) => ciQueue.setShutdown(v),
+          "When the queue finishes on its own (not when you stop it), waits 30 s, then asks the shutdown watcher script to stop Marinara. Needs tools/shutdown-watcher.mjs running on the server's computer; see Tools → Companion userscript. Only for this session."),
+      );
+    }
     const remaining = q.running ? [] : q.items.filter(isRemaining);
     if (remaining.length) actions.push(button(`Copy ${remaining.length} remaining`, () => void copyRemaining(remaining), { title: "Copies the links that weren't imported, one per line" }));
     if (q.running) {
@@ -114,7 +140,7 @@ const ciQueueUi = (() => {
     const foot = h("div", { class: "ci-queue-foot" }, summary ? h("span", { class: "ci-muted ci-grow", text: summary }) : h("span", { class: "ci-grow" }), actions);
 
     panel.classList.toggle("is-collapsed", collapsed);
-    panel.replaceChildren(head, list, foot);
+    panel.replaceChildren(head, list, shutdownRow, foot);
     if (list && running) {
       const node = list.querySelector(".ci-state--running");
       node?.scrollIntoView({ block: "nearest" });
@@ -125,6 +151,8 @@ const ciQueueUi = (() => {
     unsubscribe?.();
     unsubscribe = null;
     if (frame) cancelAnimationFrame(frame);
+    clearInterval(tick);
+    tick = 0;
     panel?.remove();
     panel = null;
   }
