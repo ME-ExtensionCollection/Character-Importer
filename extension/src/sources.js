@@ -214,8 +214,29 @@ const ciSources = (() => {
     }
     if (!detail) throw new Error("Chub's card file has no character data");
     const card = rebuiltCard(detail, summary, detail.extensions);
-    const avatarDataUrl = await avatarFromProxy(`/api/bot-browser/chub/avatar/${encPath(fullPath)}?full=1`);
+    const avatarDataUrl =
+      (await avatarFromProxy(`/api/bot-browser/chub/avatar/${encPath(fullPath)}?full=1`)) ??
+      (await chubAvatarFromNode(node, signal));
     return { card, avatarDataUrl, fullPath };
+  }
+
+  // Newer Chub cards keep their picture outside avatars/<fullPath>/ (e.g.
+  // avatars/uploads/images/gallery/…), which Marinara's proxy doesn't look at.
+  // The character's own avatar_url / max_res_url point at it.
+  async function chubAvatarFromNode(node, signal) {
+    const urls = [node?.max_res_url, node?.avatar_url].filter(
+      (u, i, all) => typeof u === "string" && /^https:\/\/([^/]+\.)?(charhub\.io|chub\.ai|characterhub\.org)\//i.test(u) && all.indexOf(u) === i,
+    );
+    for (const url of urls) {
+      try {
+        const { bytes, contentType } = await ciNet.fetchRemote(url, { signal, timeoutMs: 20_000 });
+        const mime = ciPng.sniffImageType(bytes) || contentType.split(";")[0];
+        if (mime.startsWith("image/")) return ciPng.toDataUrl(bytes, mime);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+      }
+    }
+    return null;
   }
 
   async function loadPngFromProxy(path, signal) {
