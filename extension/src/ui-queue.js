@@ -13,6 +13,21 @@ const ciQueueUi = (() => {
   let frame = 0;
   let tick = 0; // redraws the shutdown countdown every second
   let watcherPoll = 0; // checks for the shutdown watcher while the queue is active
+  let listEl = null; // the item list, kept between renders
+  let listWrap = null; // the list plus the "follow current" button over it
+  let followBtn = null;
+  // Auto-scroll: follows the current link until the list is scrolled away from it
+  let follow = true;
+  let current = null; // the current link (running, else next waiting, else last)
+  let anchor = null; // while not following: the link the drawn window is centred on
+  let rows = new WeakMap(); // queue item -> { li, sig }
+  let followed = null; // the current item last scrolled into view
+  // Links drawn before and after the current one; each "show more" click adds a page
+  const WINDOW = 50;
+  const PAGE = 200;
+  let before = WINDOW;
+  let after = WINDOW;
+  let more = {}; // the "show more" rows: { top, bottom } -> { li, text }
 
   function ensure() {
     if (panel?.isConnected) return panel;
@@ -77,24 +92,11 @@ const ciQueueUi = (() => {
       "div",
       { class: "ci-queue-head" },
       h("div", { class: "ci-queue-title" }, h("strong", { text: title }), subtitle ? h("span", { class: "ci-muted", text: subtitle }) : null),
-      h("button", { type: "button", class: "ci-icon-btn", title: collapsed ? "Expand" : "Collapse", onClick: () => ((collapsed = !collapsed), render()) }, icon(collapsed ? "chevronUp" : "chevronDown")),
+      h("button", { type: "button", class: "ci-icon-btn", title: collapsed ? "Expand" : "Collapse", onClick: () => ((collapsed = !collapsed), (followed = null), render()) }, icon(collapsed ? "chevronUp" : "chevronDown")),
       h("button", { type: "button", class: "ci-icon-btn", title: q.running ? "Hide (keeps importing)" : "Close", onClick: () => (q.running || q.paused ? hide() : ciQueue.clearFinished()) }, icon("x")),
     );
 
-    const list = collapsed
-      ? null
-      : h(
-          "ol",
-          { class: "ci-queue-list" },
-          q.items.map((item) =>
-            h(
-              "li",
-              { class: `ci-queue-item ci-state--${item.state}`, title: item.url },
-              icon(ICONS[item.state] ?? "clock", 14, item.state === "running" ? "ci-spin" : ""),
-              h("div", { class: "ci-queue-text" }, h("div", { class: "ci-queue-url", text: item.name || item.url }), item.note ? h("div", { class: "ci-queue-note", text: item.note }) : null),
-            ),
-          ),
-        );
+    const list = collapsed ? null : syncList(q.items);
 
     const summary = ["done", "warn", "skipped", "failed"]
       .filter((s) => counts[s])
@@ -152,12 +154,141 @@ const ciQueueUi = (() => {
     const foot = h("div", { class: "ci-queue-foot" }, summary ? h("span", { class: "ci-muted ci-grow", text: summary }) : h("span", { class: "ci-grow" }), actions);
 
     panel.classList.toggle("is-collapsed", collapsed);
-    // replaceChildren turns null into the text "null"
-    panel.replaceChildren(...[head, list, shutdownRow, foot].filter(Boolean));
-    if (list && running) {
-      const node = list.querySelector(".ci-state--running");
-      node?.scrollIntoView({ block: "nearest" });
+    if (list?.parentNode === panel) {
+      // The list is never moved (moving it loses its scroll position): swap the parts around it
+      for (const child of [...panel.children]) if (child !== list) child.remove();
+      list.before(head);
+      list.after(...[shutdownRow, foot].filter(Boolean));
+    } else {
+      // replaceChildren turns null into the text "null"
+      panel.replaceChildren(...[head, list, shutdownRow, foot].filter(Boolean));
     }
+    // Scroll to the current link when it changes, while following
+    if (list && follow && current && current !== followed) {
+      followed = current;
+      rows.get(current)?.li.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // Only a window around the current link is drawn: the rest of a long queue stays in the
+  // queue's data and comes in a page at a time from the "earlier" / "more waiting" rows.
+  // Items that are drawn keep their <li> between renders, rebuilt only when what it shows changes.
+  function syncList(items) {
+    if (!listWrap) {
+      listEl = h("ol", { class: "ci-queue-list", onScroll: onListScroll });
+      followBtn = h("button", { type: "button", class: "ci-icon-btn ci-queue-follow", title: "Follow the current link", "aria-label": "Follow the current link", onClick: resumeFollow }, icon("locate", 14));
+      listWrap = h("div", { class: "ci-queue-listwrap" }, listEl, followBtn);
+    }
+    if (!items.length) {
+      before = WINDOW;
+      after = WINDOW;
+      follow = true;
+      anchor = null;
+    }
+    // The running link, else the next waiting one, else the end (all finished)
+    let cur = items.findIndex((i) => i.state === "running");
+    if (cur < 0) cur = items.findIndex((i) => i.state === "pending");
+    if (cur < 0) cur = items.length;
+    current = items[Math.min(cur, items.length - 1)] ?? null;
+    // Not following: the window stays where it was, so rows don't slide away while reading
+    let at = cur;
+    if (!follow && anchor) {
+      const i = items.indexOf(anchor);
+      if (i >= 0) at = i;
+    }
+    followBtn.hidden = follow;
+    const start = Math.max(0, at - before);
+    const end = Math.min(items.length, at + 1 + after);
+
+    const lis = [];
+    if (start > 0) lis.push(moreRow("top", `Show ${Math.min(PAGE, start)} earlier (${start} hidden)`, () => loadMore("top")));
+    for (let i = start; i < end; i++) {
+      const item = items[i];
+      const sig = `${item.state}\u0000${item.name || item.url}\u0000${item.note || ""}`;
+      let row = rows.get(item);
+      if (!row || row.sig !== sig) {
+        const li = itemRow(item);
+        row?.li.replaceWith(li);
+        row = { li, sig };
+        rows.set(item, row);
+      }
+      lis.push(row.li);
+    }
+    const later = items.length - end;
+    if (later > 0) lis.push(moreRow("bottom", `${later} more waiting. Show ${Math.min(PAGE, later)}`, () => loadMore("bottom")));
+
+    const kids = listEl.children;
+    let same = kids.length === lis.length;
+    for (let i = 0; same && i < lis.length; i++) same = kids[i] === lis[i];
+    if (!same) listEl.replaceChildren(...lis);
+    return listWrap;
+  }
+
+  function isShown(item) {
+    const li = item && rows.get(item)?.li;
+    if (!li?.isConnected) return false;
+    const box = listEl.getBoundingClientRect();
+    const r = li.getBoundingClientRect();
+    return r.bottom > box.top && r.top < box.bottom;
+  }
+
+  function stopFollowing() {
+    if (!follow) return;
+    follow = false;
+    anchor = current;
+    schedule();
+  }
+
+  // Scrolling the current link out of view turns auto-scroll off
+  let scrollCheck = 0;
+  function onListScroll() {
+    if (!follow || scrollCheck) return;
+    scrollCheck = requestAnimationFrame(() => {
+      scrollCheck = 0;
+      if (follow && current && !isShown(current)) stopFollowing();
+    });
+  }
+
+  // Back to the current link, and drop the extra rows loaded meanwhile
+  function resumeFollow() {
+    follow = true;
+    anchor = null;
+    before = WINDOW;
+    after = WINDOW;
+    followed = null;
+    render();
+  }
+
+  // The "earlier" / "more waiting" rows, reused while their text stays the same
+  function moreRow(key, text, onClick) {
+    const old = more[key];
+    if (old?.text === text) return old.li;
+    const li = h("li", { class: "ci-queue-more" }, h("button", { type: "button", class: "ci-link-btn", text, onClick }));
+    more[key] = { li, text };
+    return li;
+  }
+
+  function loadMore(side) {
+    stopFollowing();
+    if (side === "top") {
+      // Keep the view where it is while rows are added above it
+      const height = listEl.scrollHeight;
+      before += PAGE;
+      render();
+      listEl.scrollTop += listEl.scrollHeight - height;
+    } else {
+      after += PAGE;
+      render();
+    }
+  }
+
+  function itemRow(item) {
+    return h(
+      "li",
+      { class: `ci-queue-item ci-state--${item.state}`, title: item.url },
+      icon(ICONS[item.state] ?? "clock", 14, item.state === "running" ? "ci-spin" : ""),
+      h("div", { class: "ci-queue-text" }, h("div", { class: "ci-queue-url", text: item.name || item.url }), item.note ? h("div", { class: "ci-queue-note", text: item.note }) : null),
+    );
   }
 
   function dispose() {
@@ -170,6 +301,13 @@ const ciQueueUi = (() => {
     watcherPoll = 0;
     panel?.remove();
     panel = null;
+    rows = new WeakMap();
+    more = {};
+    followed = null;
+    listWrap = listEl = followBtn = current = anchor = null;
+    follow = true;
+    if (scrollCheck) cancelAnimationFrame(scrollCheck);
+    scrollCheck = 0;
   }
 
   return Object.freeze({ show, hide, ensure, render, dispose });
