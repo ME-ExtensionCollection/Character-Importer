@@ -30,7 +30,7 @@ const ciQueue = (() => {
 
   function save() {
     if (disposed) return writeChain;
-    const items = queue.items.map(({ url, opts, state, note, interrupted, charId, name }) => ({ url, opts, state, note, interrupted, charId, name }));
+    const items = queue.items.map(({ url, opts, state, note, interrupted, charId, name, recheck }) => ({ url, opts, state, note, interrupted, charId, name, recheck }));
     writeChain = writeChain.then(() => ciIdb.set("importQueue", items)).catch((error) => marinara.log.error("Could not save the import queue", error));
     return writeChain;
   }
@@ -57,15 +57,16 @@ const ciQueue = (() => {
 
   /**
    * Adds links. Links already waiting or running are left out.
+   * `recheck` downloads them even if they're in the library, and compares.
    * @returns {{added: number, alreadyQueued: number, joined: boolean}}
    */
-  function add(links, opts) {
+  function add(links, opts, { recheck = false } = {}) {
     const active = new Set(queue.items.filter((i) => i.state === "pending" || i.state === "running").map((i) => i.url));
     let added = 0;
     for (const url of links) {
       if (active.has(url)) continue;
       active.add(url);
-      queue.items.push({ url, opts: { ...opts }, state: "pending", note: "" });
+      queue.items.push({ url, opts: { ...opts }, state: "pending", note: "", ...(recheck ? { recheck: true } : {}) });
       added++;
     }
     const joined = queue.running;
@@ -116,6 +117,25 @@ const ciQueue = (() => {
     return { expressions: !!opts.downloadExpressions, localize: !!opts.localizeAssets, lorebooks: !!opts.downloadLorebooks, links: true };
   }
 
+  /** Name of a library copy that answers to `key` and has this content hash. */
+  function sameCopy(key, hash) {
+    const entry = Object.values(ciLib.get()).find((e) => e.hash === hash && e.keys?.includes(key));
+    return entry ? entry.name || "a character" : null;
+  }
+
+  /** Whether Botbooru has the card as downloaded by you; null when it can't be asked (says why once). */
+  async function botbooruKnows(id, signal, setStep) {
+    setStep("Asking Botbooru");
+    try {
+      return await ciSources.botbooruKnows(id, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof ciSources.BotbooruAccessError) ciAssets.botbooruNotice(error.reason);
+      else marinara.log.warn(`Couldn't ask Botbooru about ${id}`, error);
+      return null;
+    }
+  }
+
   const SOURCE_NAMES = { chub: "Chub", botbooru: "Botbooru", uuid: "JanitorAI/Pygmalion", risu: "RisuRealm", wyvern: "Wyvern", datacat: "DataCat", aicc: "AICharacterCards" };
   const sourceName = (key) => SOURCE_NAMES[key.split(":", 1)[0]] ?? "another link";
 
@@ -136,19 +156,32 @@ const ciQueue = (() => {
     const fresh = [];
     let owned = 0;
     let already = 0;
-    for (const url of listed.links) {
-      if (item.opts.preventDuplicates && existing.keys.has(ciCore.normalizeSource(url))) owned++;
+    let updated = 0;
+    let unmarked = 0;
+    for (const { link: url, state } of listed.cards) {
+      // Cards you have: skipped if Botbooru has them as downloaded and unchanged, otherwise checked
+      // (changed since, or imported without your login so Botbooru doesn't know)
+      const have = item.opts.preventDuplicates && existing.keys.has(ciCore.normalizeSource(url));
+      if (have && state === "current") owned++;
       else if (queued.has(url)) already++;
       else {
+        if (have && state === "updated") updated++;
+        else if (have) unmarked++;
         queued.add(url);
-        fresh.push({ url, opts: { ...item.opts }, state: "pending", note: "" });
+        fresh.push({ url, opts: { ...item.opts }, state: "pending", note: "", ...(have ? { recheck: true } : {}) });
       }
     }
     queue.items.splice(queue.items.indexOf(item) + 1, 0, ...fresh);
-    const left = [owned && `${owned} already in the library`, already && `${already} already queued`].filter(Boolean);
+    const total = listed.cards.length;
+    const parts = [
+      updated && `${updated} updated since you got ${updated === 1 ? "it" : "them"}`,
+      unmarked && `${unmarked} you have to compare`,
+      owned && `${owned} already in the library`,
+      already && `${already} already queued`,
+    ].filter(Boolean);
     item.name = listed.name;
     item.state = fresh.length ? "done" : "skipped";
-    item.note = `${listed.name}: queued ${fresh.length} of ${listed.links.length} card${listed.links.length === 1 ? "" : "s"}${left.length ? ` (${left.join(", ")})` : ""}`;
+    item.note = `${listed.name}: queued ${fresh.length} of ${total} card${total === 1 ? "" : "s"}${parts.length ? ` (${parts.join(", ")})` : ""}`;
   }
 
   /**
@@ -208,9 +241,16 @@ const ciQueue = (() => {
       return null;
     }
 
-    if (opts.preventDuplicates && existing.keys.has(key)) {
-      finish("skipped", `Duplicate link (${lookup(existing.keys, key)})`);
-      return "link";
+    // recheck: download it anyway and compare with the library copy (a Botbooru card that may have
+    // changed, or that Botbooru doesn't know you have because it was imported without your login)
+    let recheck = !!item.recheck;
+    if (opts.preventDuplicates && existing.keys.has(key) && !recheck) {
+      const known = plan.provider === "botbooru" ? await botbooruKnows(plan.id, signal, setStep) : null;
+      if (known !== false) {
+        finish("skipped", `Duplicate link (${lookup(existing.keys, key)})${known ? "; Botbooru has it as downloaded" : ""}`);
+        return "link";
+      }
+      recheck = true;
     }
 
     setStep("Downloading card");
@@ -227,13 +267,19 @@ const ciQueue = (() => {
 
     // The card can name other sources too, e.g. a Botbooru re-upload of a Chub card. Only an
     // identical copy is skipped: creators who moved sites often updated the card on the new one.
+    // A rechecked card is compared with its own link's copies too.
     let olderCopy = null;
     if (opts.preventDuplicates) {
-      const others = ciCore.keysFromCard(loaded.card).filter((k) => k !== key && existing.keys.has(k));
-      const same = others.find((k) => hash && ciLib.get()[existing.keys.get(k)]?.hash === hash);
+      const keys = [...new Set([...(recheck ? [key] : []), ...ciCore.keysFromCard(loaded.card)])];
+      const others = keys.filter((k) => (k !== key || recheck) && existing.keys.has(k));
+      const same = hash ? others.map((k) => [k, sameCopy(k, hash)]).find(([, copy]) => copy) : null;
       if (same) {
-        finish("skipped", `Same card already in the library from ${sourceName(same)} (${lookup(existing.keys, same)})`);
-        return "content";
+        const [k, copy] = same;
+        const marked = recheck && plan.provider === "botbooru"
+          ? (loaded.botbooruRecorded ? "; marked as downloaded on Botbooru" : "; not marked on Botbooru (no login)")
+          : "";
+        finish("skipped", `${k === key ? "Duplicate link, same as your copy" : `Same card already in the library from ${sourceName(k)}`} (${copy})${marked}`);
+        return k === key ? "link" : "content";
       }
       if (others.length) olderCopy = `${lookup(existing.keys, others[0])} from ${sourceName(others[0])}`;
     }

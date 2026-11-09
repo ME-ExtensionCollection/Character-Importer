@@ -401,7 +401,7 @@ const ciSources = (() => {
       case "botbooru": {
         // The PNG has the card, avatar and lorebook; the gallery is an asset step (needs a login)
         const file = await loadBotbooruCard(plan.id, signal);
-        result = { card: file.json, avatarDataUrl: file.avatarDataUrl };
+        result = { card: file.json, avatarDataUrl: file.avatarDataUrl, botbooruRecorded: file.recorded };
         break;
       }
       default: {
@@ -414,7 +414,10 @@ const ciSources = (() => {
       }
     }
     if (!isCharacterCard(result.card)) throw new Error("The downloaded file isn't a character card");
-    return { type: "character", card: result.card, avatarDataUrl: result.avatarDataUrl ?? null, charx: result.charx ?? null, botBrowserSource: botBrowserSource(plan, result), provider: plan.provider };
+    return {
+      type: "character", card: result.card, avatarDataUrl: result.avatarDataUrl ?? null, charx: result.charx ?? null,
+      botBrowserSource: botBrowserSource(plan, result), provider: plan.provider, botbooruRecorded: !!result.botbooruRecorded,
+    };
   }
 
   // ── Botbooru (with your login, through the userscript) ──
@@ -472,6 +475,7 @@ const ciSources = (() => {
    * counts the download for your account (its "Downloaded" filter and
    * "Only updated" view); otherwise downloaded anonymously, as the card
    * itself is public. The gallery step after it says when the login is missing.
+   * @returns {Promise<{json: object, avatarDataUrl: string|null, recorded: boolean}>} recorded: sent with the login
    */
   async function loadBotbooruCard(id, signal) {
     const gap = Date.now() < botbooruSlowUntil ? BOTBOORU_SLOW_GAP_MS : BOTBOORU_GAP_MS;
@@ -480,10 +484,12 @@ const ciSources = (() => {
     const url = `https://botbooru.com/download/png/${encodeURIComponent(id)}`;
     const options = { signal, accept: CARD_ACCEPT, timeoutMs: 30_000 };
     let response = null;
+    let recorded = false;
     try {
       if ((await ciBridge.detect(600)) && ciBridge.canUseLogin("botbooru.com")) {
         try {
           response = await ciNet.fetchRemote(url, { ...options, siteLogin: true });
+          recorded = true;
         } catch (error) {
           if (signal?.aborted) throw error;
           const loginProblem =
@@ -497,7 +503,13 @@ const ciSources = (() => {
       lastBotbooruDownload = Date.now();
     }
     if (response.header?.("x-botbooru-pace") === "warn") botbooruSlowUntil = Date.now() + 5 * 60 * 1000;
-    return parseCardFile(response);
+    return { ...(await parseCardFile(response)), recorded };
+  }
+
+  /** Whether Botbooru has this card down as downloaded by your account (needs the login). */
+  async function botbooruKnows(id, signal) {
+    const post = await fetchBotbooru(`/post/${encodeURIComponent(id)}`, signal);
+    return post?.downloaded_by_me === true;
   }
 
   const BOTBOORU_PAGE = 100; // the most /api/users takes
@@ -505,11 +517,14 @@ const ciSources = (() => {
   /**
    * Every card a Botbooru user uploaded, newest first. Checks the login
    * first: logged out, Botbooru quietly lists only the safe-for-work few.
-   * @returns {Promise<{name: string, links: string[]}>}
+   * `state` is Botbooru's record for your account: "current" (downloaded),
+   * "updated" (changed since you downloaded it) or "" (never downloaded).
+   * @returns {Promise<{name: string, cards: {link: string, id: string, state: string}[]}>}
    */
   async function listBotbooruProfile(userId, { signal, onProgress } = {}) {
     await fetchBotbooru("/auth/me", signal);
-    const ids = [];
+    const cards = [];
+    const seen = new Set();
     let name = `user ${userId}`;
     for (let offset = 0; offset < 10_000; offset += BOTBOORU_PAGE) {
       const page = await fetchBotbooru(`/api/users/${userId}?upload_limit=${BOTBOORU_PAGE}&upload_offset=${offset}&upload_sort=latest`, signal);
@@ -517,14 +532,16 @@ const ciSources = (() => {
       const uploads = Array.isArray(page?.uploads) ? page.uploads : [];
       for (const upload of uploads) {
         const id = String(upload?.id ?? "");
-        if (/^\d+$/.test(id) && (!upload.status || upload.status === "active") && !ids.includes(id)) ids.push(id);
+        if (!/^\d+$/.test(id) || (upload.status && upload.status !== "active") || seen.has(id)) continue;
+        seen.add(id);
+        cards.push({ link: `https://botbooru.com/character/${id}`, id, state: typeof upload.download_state === "string" ? upload.download_state : "" });
       }
       const total = Number(page?.uploads_list_total) || 0;
-      onProgress?.(ids.length, total);
+      onProgress?.(cards.length, total);
       if (uploads.length < BOTBOORU_PAGE || offset + BOTBOORU_PAGE >= total) break;
       await ciNet.sleep(1000, signal);
     }
-    return { name, links: ids.map((id) => `https://botbooru.com/character/${id}`) };
+    return { name, cards };
   }
 
   // ── Chub lorebooks ──
@@ -552,5 +569,5 @@ const ciSources = (() => {
     return cloned;
   }
 
-  return Object.freeze({ UnsupportedLinkError, BotbooruAccessError, fetchBotbooru, resetBotbooruBlock, listBotbooruProfile, resolve, load, loadChubLorebook, fetchChubDetail, withMarker, isCharacterCard, isLorebook, editable });
+  return Object.freeze({ UnsupportedLinkError, BotbooruAccessError, fetchBotbooru, resetBotbooruBlock, listBotbooruProfile, loadBotbooruCard, botbooruKnows, resolve, load, loadChubLorebook, fetchChubDetail, withMarker, isCharacterCard, isLorebook, editable });
 })();

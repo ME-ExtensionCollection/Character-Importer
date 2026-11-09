@@ -465,17 +465,23 @@ const ciAssets = (() => {
 
   /**
    * Tells the user why Botbooru couldn't be read, with what to do about it.
-   * Doesn't wait. `context` is "gallery" (a card's gallery) or "profile" (a
-   * creator's card list), which never falls back to the few public cards.
+   * Doesn't wait. `context` is "gallery" (a card's gallery), "profile" (a
+   * creator's card list, which never falls back to the few public cards) or
+   * "sync" (telling Botbooru which cards you have).
    */
   function botbooruNotice(reason, context = "gallery") {
+    const isGallery = context === "gallery";
     const isProfile = context === "profile";
-    // A profile always says why it stopped; gallery notices are limited so a long queue doesn't keep asking
-    if (botbooruNoticeOpen || (!isProfile && Date.now() - botbooruNoticeAt < 10 * 60 * 1000)) return;
+    // Profiles and the sync job always say why they stopped; gallery notices are limited so a long queue doesn't keep asking
+    if (botbooruNoticeOpen || (isGallery && Date.now() - botbooruNoticeAt < 10 * 60 * 1000)) return;
     botbooruNoticeOpen = true;
     const { h } = ciDom;
-    const what = isProfile ? "a creator's full card list" : "a card's gallery";
-    const retry = isProfile ? "Then paste the profile link again." : "Then run Tools → Assets → Fetch assets to get the galleries you skipped.";
+    const what = { gallery: "a card's gallery", profile: "a creator's full card list", sync: "which cards you downloaded" }[context];
+    const retry = {
+      gallery: "Then run Tools → Assets → Fetch assets to get the galleries you skipped.",
+      profile: "Then paste the profile link again.",
+      sync: "Then run \"Tell Botbooru which cards you have\" again.",
+    }[context];
     const text = {
       login: [
         `Botbooru only shows ${what} to logged-in users, and the companion userscript has no working Botbooru login.`,
@@ -486,28 +492,30 @@ const ciAssets = (() => {
       "no-companion": ["Botbooru is read through the companion userscript, which isn't running on this page.", "Install it (Tools → Companion userscript). " + retry],
     }[reason] ?? [];
     const d = ciDom.dialog({
-      title: isProfile ? "Botbooru profile not queued" : "Botbooru gallery skipped",
+      title: { gallery: "Botbooru gallery skipped", profile: "Botbooru profile not queued", sync: "Botbooru not updated" }[context],
       body: [
         ...text.map((t) => h("p", { text: t })),
         h("p", {
           class: "ci-muted",
-          text: isProfile
-            ? "Logged out, Botbooru lists only a creator's few safe-for-work cards, so nothing was queued rather than a partial list."
-            : "The cards themselves were imported. Only their Botbooru galleries are missing.",
+          text: {
+            gallery: "The cards themselves were imported. Only their Botbooru galleries are missing.",
+            profile: "Logged out, Botbooru lists only a creator's few safe-for-work cards, so nothing was queued rather than a partial list.",
+            sync: "Nothing in your library was changed.",
+          }[context],
         }),
       ],
       onClose: () => {
         botbooruNoticeOpen = false;
-        if (!isProfile) botbooruNoticeAt = Date.now();
+        if (isGallery) botbooruNoticeAt = Date.now();
       },
     });
     d.setActions([
-      isProfile ? null : { label: "Ignore Botbooru galleries", onClick: () => {
+      !isGallery ? null : { label: "Ignore Botbooru galleries", onClick: () => {
         ciSettings.set({ botbooruGallery: false });
         ciDom.toast("Botbooru galleries turned off. Turn them back on in Tools → Import.", "info");
         d.close();
       } },
-      { label: isProfile ? "Close" : "Not now", value: null },
+      { label: isGallery ? "Not now" : "Close", value: null },
       reason === "login" ? { label: "Open Botbooru", kind: "primary", onClick: () => {
         ciSources.resetBotbooruBlock();
         window.open("https://botbooru.com/account", "_blank", "noopener");
@@ -769,6 +777,61 @@ const ciAssets = (() => {
   }
 
   // ── Library jobs ──
+
+  /**
+   * Tells Botbooru which of its cards are in the library. Cards it doesn't
+   * have as downloaded by you are downloaded with your login (which records
+   * them) and compared: identical ones are now marked, changed ones are
+   * returned as possible updates rather than marked silently.
+   * @returns {Promise<{done: number, total: number, known: number, marked: number, updates: string[], stopped: boolean}>}
+   */
+  async function syncBotbooruDownloads({ onStatus }) {
+    const run = startJob("Tell Botbooru");
+    ciSources.resetBotbooruBlock();
+    try {
+      await ciLib.refresh({ onProgress: onStatus });
+      // post id -> content hashes of every library copy
+      const posts = new Map();
+      for (const entry of Object.values(ciLib.get())) {
+        for (const key of entry.keys ?? []) {
+          if (!key.startsWith("botbooru:")) continue;
+          const id = key.slice(9);
+          if (!posts.has(id)) posts.set(id, new Set());
+          if (entry.hash) posts.get(id).add(entry.hash);
+        }
+      }
+      const result = { done: 0, total: posts.size, known: 0, marked: 0, updates: [], stopped: false };
+      const signal = run.controller.signal;
+      for (const [id, hashes] of posts) {
+        if (run.stop) break;
+        result.done++;
+        onStatus(`Tell Botbooru ${result.done} / ${result.total}`);
+        try {
+          if (await ciSources.botbooruKnows(id, signal)) {
+            result.known++;
+          } else {
+            const file = await ciSources.loadBotbooruCard(id, signal);
+            if (!file.recorded) throw new ciSources.BotbooruAccessError("login", "The download went without your Botbooru login");
+            if (hashes.has(ciCore.contentHash(file.json))) result.marked++;
+            else result.updates.push(`https://botbooru.com/character/${id}`);
+          }
+        } catch (error) {
+          if (run.stop || signal.aborted) break;
+          if (error instanceof ciSources.BotbooruAccessError) {
+            botbooruNotice(error.reason, "sync");
+            throw new Error(`Stopped: ${error.message}`);
+          }
+          // A removed card or a one-off failure doesn't stop the rest
+          marinara.log.warn(`Tell Botbooru: card ${id} failed`, error);
+        }
+        await ciNet.sleep(500, signal).catch(() => undefined);
+      }
+      result.stopped = run.stop;
+      return result;
+    } finally {
+      job = null;
+    }
+  }
 
   let job = null; // {kind, stop, controller}
   const currentJob = () => job;
@@ -1235,7 +1298,7 @@ const ciAssets = (() => {
     for (const store of [failuresStore, linksStore, checkedStore, packsStore, hashStore, stMissingStore]) await store.remove(ids);
   }
 
-  return Object.freeze({ botbooruNotice,
+  return Object.freeze({ botbooruNotice, syncBotbooruDownloads,
     TEXT_FIELDS, cardImageUrls, rewriteImageUrls, selfRef, charRef, fileOf,
     galleryState, saveImages, fetchImageBytes, cleanupTempGallery, ensureFolder,
     importExpressions, importChubGallery, importChubLorebooks, importLorebookLink, localizeImages, flagAssetLinks, pruneAssetLinks,

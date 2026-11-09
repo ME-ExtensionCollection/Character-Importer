@@ -264,6 +264,10 @@ const ciToolsUi = (() => {
       if (!r) return "";
       if ("missing" in r) return `${label}: ${plural(r.cards, "card")}, ${plural(r.saved, "image")} saved (${r.gallery} Chub gallery), ${r.missing} card images not found${r.stopped ? " (stopped)" : ""}.`;
       if ("recovered" in r) return `${label}: ${r.done} / ${r.total} cards, ${plural(r.recovered, "image")} saved${r.stopped ? " (stopped)" : ""}.`;
+      if ("marked" in r) {
+        return `${label}: ${r.done} / ${plural(r.total, "Botbooru card")}, ${r.known} already known, ${r.marked} marked as downloaded` +
+          `${r.updates.length ? `, ${plural(r.updates.length, "card")} changed since you imported ${r.updates.length === 1 ? "it" : "them"}` : ""}${r.stopped ? " (stopped)" : ""}.`;
+      }
       if ("found" in r) return `${r.found} of ${plural(r.scanned, "card")} still link web images${r.stopped ? " (stopped)" : ""}.`;
       return `${label}: ${r.done} / ${plural(r.total, "card")}${r.warned ? `, ${r.warned} with warnings` : ""}${r.stopped ? " (stopped)" : ""}.`;
     };
@@ -272,6 +276,35 @@ const ciToolsUi = (() => {
       title: "Shift+click: only find cards that still link web images (downloads nothing)",
     });
     const viewBtn = button("View failed…", () => void viewFailed(showFailed));
+
+    // Botbooru: its "Downloaded" filter only knows cards downloaded with your login
+    const BB_JOB = "Tell Botbooru";
+    const offerUpdates = async (links) => {
+      const ok = await ciDom.confirm(
+        "Changed on Botbooru",
+        `${plural(links.length, "card")} changed on Botbooru since you imported ${links.length === 1 ? "it" : "them"}, so ${links.length === 1 ? "it wasn't" : "they weren't"} marked as downloaded. ` +
+          "Queue the new versions? They're imported as new characters next to your copies; Flag duplicates groups each pair to compare.",
+        "Queue them",
+      );
+      if (!ok) return;
+      const s = ciSettings.get();
+      const opts = {
+        preventDuplicates: s.preventDuplicates, contentCheck: s.contentCheck, downloadExpressions: s.downloadExpressions,
+        localizeAssets: s.localizeAssets, downloadLorebooks: s.downloadLorebooks, tagImportMode: s.tagImportMode, tagMerge: s.tagMerge,
+        importEmbeddedLorebook: s.importEmbeddedLorebook, splitDescription: s.splitDescription, regexScriptScope: s.regexScriptScope,
+      };
+      ciQueue.add(links, opts, { recheck: true });
+      ciQueueUi.show();
+    };
+    const botbooruBtn = button(
+      "Tell Botbooru which cards you have",
+      () => runJob(async (o) => {
+        const result = await ciAssets.syncBotbooruDownloads(o);
+        if (result.updates.length) void offerUpdates(result.updates);
+        return result;
+      }, BB_JOB),
+      { title: "Cards Botbooru doesn't have as downloaded by you are downloaded once with your login and compared with your copy" },
+    );
 
     // SillyTavern import: images Dupe Link Skip saved on the ST server
     const ST_JOB = "Restore SillyTavern images";
@@ -305,6 +338,8 @@ const ciToolsUi = (() => {
       const other = (kind) => !!active && active !== kind;
       const isRetry = (kind) => kind === "Retry failed images" || kind === "Find unsaved images";
       fetchBtn.textContent = mine("Fetch assets") ? "Stop" : "Fetch assets";
+      botbooruBtn.textContent = mine(BB_JOB) ? "Stop" : "Tell Botbooru which cards you have";
+      botbooruBtn.disabled = other(BB_JOB);
       retryBtn.textContent = active && isRetry(active) ? "Stop" : "Retry failed images";
       stRestoreBtn.textContent = mine(ST_JOB) ? "Stop" : "Restore from folder";
       fetchBtn.disabled = other("Fetch assets");
@@ -322,6 +357,14 @@ const ciToolsUi = (() => {
         h("div", { class: "ci-row" }, fetchBtn),
       ),
       section("Card images that could not be saved", h("div", { class: "ci-row" }, retryBtn, failedCount, viewBtn)),
+      section(
+        "Botbooru downloads",
+        h("p", {
+          class: "ci-muted",
+          text: "Botbooru's \"Downloaded\" filter and \"Only updated\" view only know cards downloaded with your Botbooru login. This checks every Botbooru card in your library: ones Botbooru doesn't know about are downloaded once with your login and compared with your copy. Identical ones get marked; changed ones are offered as updates. Needs the companion userscript and your Botbooru login.",
+        }),
+        h("div", { class: "ci-row" }, botbooruBtn),
+      ),
       h(
         "details",
         { class: "ci-details" },

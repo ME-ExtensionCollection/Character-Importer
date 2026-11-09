@@ -70,6 +70,17 @@ re-upload of a Chub card) is skipped only if it's identical. Creators who
 moved from Chub often updated their cards on Botbooru, so a copy that
 differs is imported and noted as a possible update; Flag duplicates groups
 the two (they share the Chub link) so you can compare or keep both.
+
+Botbooru's own "Downloaded" filter only knows cards downloaded with your
+Botbooru login, so imports send it. A Botbooru link you already have isn't
+simply skipped if Botbooru doesn't have it down as downloaded (e.g. it was
+imported without your login): it's downloaded with your login and compared
+with your copy, skipped (now marked) if identical, imported as a possible
+update if not. Profile imports use Botbooru's record the same way: cards
+it has as downloaded are left out, ones changed since are queued as
+updates. **Tools → Assets → Tell Botbooru which cards you have** does this
+once for every Botbooru card already in the library, and offers to queue
+the ones that changed.
 Not yet: Perchance, and Chub expression packs that only come as a zip.
 
 ## Install
