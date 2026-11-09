@@ -59,7 +59,7 @@ const ciToolsUi = (() => {
       "label",
       { class: "ci-field" },
       h("span", { text: label }),
-      h("input", { class: "ci-input", type: "text", value: ciSettings.get()[key] ?? "", placeholder, onChange: (e) => ciSettings.set({ [key]: e.currentTarget.value.trim() }) }),
+      h("input", { class: "ci-input", type: "text", value: ciSettings.get()[key] ?? "", placeholder, onInput: (e) => ciSettings.set({ [key]: e.currentTarget.value.trim() }) }),
     );
   }
 
@@ -85,7 +85,7 @@ const ciToolsUi = (() => {
         }),
         (() => {
           const box = h("textarea", { class: "ci-input", rows: 4, spellcheck: false, value: ciSettings.get().profileTagBlacklist.join("\n"), placeholder: "tag_name" });
-          box.addEventListener("change", () =>
+          box.addEventListener("input", () =>
             ciSettings.set({ profileTagBlacklist: [...new Set(box.value.split(/\r?\n/).map((l) => ciCore.normTag(l)).filter(Boolean))] }),
           );
           return box;
@@ -99,7 +99,7 @@ const ciToolsUi = (() => {
         }),
         (() => {
           const box = h("textarea", { class: "ci-input", rows: 4, spellcheck: false, value: ciSettings.get().botbooruRepostAccounts.join("\n"), placeholder: "username" });
-          box.addEventListener("change", () =>
+          box.addEventListener("input", () =>
             ciSettings.set({ botbooruRepostAccounts: [...new Set(box.value.split(/\r?\n/).map((l) => l.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))] }),
           );
           return box;
@@ -681,9 +681,12 @@ const ciToolsUi = (() => {
       render();
     };
     const blacklist = h("textarea", { class: "ci-input", rows: 6, spellcheck: false, value: s.linkBlacklist.join("\n") });
-    blacklist.addEventListener("change", async () => {
+    let pruneTimer = 0;
+    blacklist.addEventListener("input", () => {
       ciSettings.set({ linkBlacklist: blacklist.value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean) });
-      await ciAssets.pruneAssetLinks();
+      // Pruning updates cards, so only once typing pauses
+      clearTimeout(pruneTimer);
+      pruneTimer = setTimeout(() => void ciAssets.pruneAssetLinks(), 1000);
     });
     pane.append(
       section(

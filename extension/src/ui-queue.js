@@ -4,7 +4,7 @@
 const ciQueueUi = (() => {
   "use strict";
 
-  const { h, icon, button, plural } = ciDom;
+  const { h, icon, button, plural, toast } = ciDom;
   const ICONS = { pending: "clock", running: "loader", done: "check", warn: "alert", skipped: "skip", failed: "fail" };
   let panel = null;
   let hidden = true;
@@ -33,6 +33,28 @@ const ciQueueUi = (() => {
   function hide() {
     hidden = true;
     render();
+  }
+
+  // Links that never ran: still waiting, or cut off by a stop or dismiss (the current one too, on Stop now)
+  const isRemaining = (item) => item.state === "pending" || ((item.state === "skipped" || item.state === "failed") && (item.note === "Stopped" || item.note === "Dismissed"));
+
+  async function copyRemaining(items) {
+    const text = items.map((i) => i.url).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // No clipboard API (plain http, or permission refused): the old way
+      const area = h("textarea", { value: text, style: { position: "fixed", opacity: "0" } });
+      document.body.append(area);
+      area.select();
+      const ok = document.execCommand?.("copy");
+      area.remove();
+      if (!ok) {
+        toast("Couldn't copy to the clipboard.", "error");
+        return;
+      }
+    }
+    toast(`Copied ${plural(items.length, "link")}. Paste them into the import box to carry on.`, "success");
   }
 
   function render() {
@@ -77,6 +99,8 @@ const ciQueueUi = (() => {
       .map((s) => `${counts[s]} ${{ done: "done", warn: "with warnings", skipped: "skipped", failed: "failed" }[s]}`)
       .join(" · ");
     const actions = [];
+    const remaining = q.running ? [] : q.items.filter(isRemaining);
+    if (remaining.length) actions.push(button(`Copy ${remaining.length} remaining`, () => void copyRemaining(remaining), { title: "Copies the links that weren't imported, one per line" }));
     if (q.running) {
       actions.push(button(q.stop ? "Stopping…" : "Stop after this link", () => ciQueue.stopAfterCurrent(), { disabled: q.stop }));
       actions.push(button("Stop now", () => ciQueue.abort(), { kind: "danger" }));
