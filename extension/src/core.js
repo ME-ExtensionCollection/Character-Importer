@@ -62,6 +62,7 @@ const ciCore = (() => {
     if (host.includes("datacat.run") && parts[0] === "characters" && parts[1]) return `datacat:${parts[1].toLowerCase()}`;
     if (host.includes("aicharactercards.com")) return `aicc:${parts.slice(-2).join("/").toLowerCase()}`;
     if (host === "botbooru.com") {
+      if (parts[0] === "profile" && /^\d+$/.test(parts[1] ?? "")) return `botbooruuser:${parts[1]}`;
       // /character/<id>, /post/<id>, /download/png/<id>
       const id = ["character", "post"].includes(parts[0]) ? parts[1] : parts[0] === "download" ? parts[2] : "";
       if (/^\d+$/.test(id ?? "")) return `botbooru:${id}`;

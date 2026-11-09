@@ -421,46 +421,11 @@ const ciAssets = (() => {
 
   // ── Botbooru gallery ──
 
-  /** Why a Botbooru gallery couldn't be read: "login", "refused", "old-companion" or "no-companion". */
-  class BotbooruAccessError extends Error {
-    constructor(reason, message) {
-      super(message);
-      this.reason = reason;
-    }
-  }
-
+  const { BotbooruAccessError } = ciSources;
   const botbooruPostId = (data) => {
     const id = String(data?.extensions?.botbooru?.post_id ?? "");
     return /^\d+$/.test(id) ? id : null;
   };
-
-  // After a refusal, later cards in the same run skip the request for a little while
-  let botbooruBlocked = null; // {error, at}
-
-  /** Botbooru's post JSON, read with this browser's Botbooru login (through the userscript). */
-  async function fetchBotbooruPost(postId, signal) {
-    if (botbooruBlocked && Date.now() - botbooruBlocked.at < 2 * 60 * 1000) throw botbooruBlocked.error;
-    try {
-      return await requestBotbooruPost(postId, signal);
-    } catch (error) {
-      if (error instanceof BotbooruAccessError) botbooruBlocked = { error, at: Date.now() };
-      throw error;
-    }
-  }
-
-  async function requestBotbooruPost(postId, signal) {
-    if (!(await ciBridge.detect(600))) throw new BotbooruAccessError("no-companion", "Botbooru galleries need the companion userscript");
-    if (!ciBridge.canUseLogin("botbooru.com")) throw new BotbooruAccessError("old-companion", "Botbooru galleries need companion userscript 2.5 or newer");
-    try {
-      return await ciNet.fetchRemoteJson(`https://botbooru.com/post/${postId}`, { signal, siteLogin: true });
-    } catch (error) {
-      // Botbooru answers 404 {"detail":"login_required"} without a valid login (none yet, or expired)
-      if (error instanceof ciNet.HttpError && [401, 403, 404].includes(error.status)) throw new BotbooruAccessError("login", "Botbooru didn't accept the saved login; open botbooru.com in this browser while logged in");
-      if (error instanceof ciBridge.BridgeError && error.kind === "no-login") throw new BotbooruAccessError("login", error.message);
-      if (error instanceof ciBridge.BridgeError && error.kind === "login-refused") throw new BotbooruAccessError("refused", error.message);
-      throw error;
-    }
-  }
 
   /**
    * Botbooru mini gallery into the character's gallery. Like the Chub
@@ -470,7 +435,7 @@ const ciAssets = (() => {
   async function importBotbooruGallery(charId, data, { signal, onProgress } = {}) {
     const postId = botbooruPostId(data);
     if (!postId) return { added: 0, failed: 0, data };
-    const post = await fetchBotbooruPost(postId, signal);
+    const post = await ciSources.fetchBotbooru(`/post/${postId}`, signal);
     const images = Array.isArray(post?.mini_gallery?.images) ? post.mini_gallery.images : [];
     const urls = images
       .filter((img) => !img?.status || img.status === "approved")
@@ -498,38 +463,53 @@ const ciAssets = (() => {
   let botbooruNoticeOpen = false;
   let botbooruNoticeAt = 0;
 
-  /** Tells the user why Botbooru galleries were skipped, with what to do about it. Doesn't wait. */
-  function botbooruNotice(reason) {
-    if (botbooruNoticeOpen || Date.now() - botbooruNoticeAt < 10 * 60 * 1000) return;
+  /**
+   * Tells the user why Botbooru couldn't be read, with what to do about it.
+   * Doesn't wait. `context` is "gallery" (a card's gallery) or "profile" (a
+   * creator's card list), which never falls back to the few public cards.
+   */
+  function botbooruNotice(reason, context = "gallery") {
+    const isProfile = context === "profile";
+    // A profile always says why it stopped; gallery notices are limited so a long queue doesn't keep asking
+    if (botbooruNoticeOpen || (!isProfile && Date.now() - botbooruNoticeAt < 10 * 60 * 1000)) return;
     botbooruNoticeOpen = true;
     const { h } = ciDom;
-    const retry = "Then run Tools → Assets → Fetch assets to get the galleries you skipped.";
+    const what = isProfile ? "a creator's full card list" : "a card's gallery";
+    const retry = isProfile ? "Then paste the profile link again." : "Then run Tools → Assets → Fetch assets to get the galleries you skipped.";
     const text = {
       login: [
-        "Botbooru only shows a card's gallery to logged-in users, and the companion userscript has no working Botbooru login.",
+        `Botbooru only shows ${what} to logged-in users, and the companion userscript has no working Botbooru login.`,
         "Botbooru keeps its login in the page, not in a cookie, so the userscript copies it when you open botbooru.com. Open it in this browser (the one Marinara is open in) and log in if you aren't. " + retry,
       ],
       refused: ["You told the companion userscript not to use your Botbooru login.", "To change that, use \"Char Importer: forget site logins\" in the userscript menu, and allow it when asked. " + retry],
-      "old-companion": ["Your companion userscript is too old to use your Botbooru login.", "Update it to 2.5 or newer from this extension's userscript folder. " + retry],
-      "no-companion": ["Botbooru galleries are read through the companion userscript, which isn't running on this page.", "Install it (Tools → Companion userscript). " + retry],
+      "old-companion": ["Your companion userscript is too old for this.", "Update it to 2.7 or newer from this extension's userscript folder. " + retry],
+      "no-companion": ["Botbooru is read through the companion userscript, which isn't running on this page.", "Install it (Tools → Companion userscript). " + retry],
     }[reason] ?? [];
     const d = ciDom.dialog({
-      title: "Botbooru gallery skipped",
-      body: [...text.map((t) => h("p", { text: t })), h("p", { class: "ci-muted", text: "The cards themselves were imported. Only their Botbooru galleries are missing." })],
+      title: isProfile ? "Botbooru profile not queued" : "Botbooru gallery skipped",
+      body: [
+        ...text.map((t) => h("p", { text: t })),
+        h("p", {
+          class: "ci-muted",
+          text: isProfile
+            ? "Logged out, Botbooru lists only a creator's few safe-for-work cards, so nothing was queued rather than a partial list."
+            : "The cards themselves were imported. Only their Botbooru galleries are missing.",
+        }),
+      ],
       onClose: () => {
         botbooruNoticeOpen = false;
-        botbooruNoticeAt = Date.now();
+        if (!isProfile) botbooruNoticeAt = Date.now();
       },
     });
     d.setActions([
-      { label: "Ignore Botbooru galleries", onClick: () => {
+      isProfile ? null : { label: "Ignore Botbooru galleries", onClick: () => {
         ciSettings.set({ botbooruGallery: false });
         ciDom.toast("Botbooru galleries turned off. Turn them back on in Tools → Import.", "info");
         d.close();
       } },
-      { label: "Not now", value: null },
+      { label: isProfile ? "Close" : "Not now", value: null },
       reason === "login" ? { label: "Open Botbooru", kind: "primary", onClick: () => {
-        botbooruBlocked = null;
+        ciSources.resetBotbooruBlock();
         window.open("https://botbooru.com/account", "_blank", "noopener");
         d.close();
       } } : null,
@@ -810,7 +790,7 @@ const ciAssets = (() => {
    */
   async function backfill({ onStatus }) {
     const run = startJob("Fetch assets");
-    botbooruBlocked = null; // the user may have just logged in
+    ciSources.resetBotbooruBlock(); // the user may have just logged in
     try {
       const s = ciSettings.get();
       const parts = s.backfillParts;
@@ -1255,7 +1235,7 @@ const ciAssets = (() => {
     for (const store of [failuresStore, linksStore, checkedStore, packsStore, hashStore, stMissingStore]) await store.remove(ids);
   }
 
-  return Object.freeze({
+  return Object.freeze({ botbooruNotice,
     TEXT_FIELDS, cardImageUrls, rewriteImageUrls, selfRef, charRef, fileOf,
     galleryState, saveImages, fetchImageBytes, cleanupTempGallery, ensureFolder,
     importExpressions, importChubGallery, importChubLorebooks, importLorebookLink, localizeImages, flagAssetLinks, pruneAssetLinks,

@@ -52,6 +52,7 @@ const ciSources = (() => {
       const id = parts.slice(-2).join("/");
       return { link, key, kind: "character", provider: "aicc", id, label: `AICC ${id}` };
     }
+    if (prefix === "botbooruuser") return { link, key, kind: "list", provider: "botbooru", id: rest, label: `Botbooru profile ${rest}` };
     if (prefix === "botbooru") return { link, key, kind: "character", provider: "botbooru", id: rest, label: `Botbooru ${rest}` };
     if (prefix === "perchance") throw new UnsupportedLinkError("Perchance links aren't supported yet. Download the card and use Marinara's file import.");
     if (prefix === "url") return { link, key, kind: "character", provider: "url", id: link, label: host || link };
@@ -411,6 +412,76 @@ const ciSources = (() => {
     return { type: "character", card: result.card, avatarDataUrl: result.avatarDataUrl ?? null, charx: result.charx ?? null, botBrowserSource: botBrowserSource(plan, result), provider: plan.provider };
   }
 
+  // ── Botbooru (with your login, through the userscript) ──
+
+  /** Why Botbooru couldn't be read with a login: "login", "refused", "old-companion" or "no-companion". */
+  class BotbooruAccessError extends Error {
+    constructor(reason, message) {
+      super(message);
+      this.reason = reason;
+    }
+  }
+
+  // After a refusal, later requests skip asking for a little while (one per card otherwise)
+  let botbooruBlocked = null; // {error, at}
+  const resetBotbooruBlock = () => void (botbooruBlocked = null);
+
+  /** JSON from a botbooru.com path, sent with your Botbooru login. */
+  async function fetchBotbooru(path, signal) {
+    if (botbooruBlocked && Date.now() - botbooruBlocked.at < 2 * 60 * 1000) throw botbooruBlocked.error;
+    try {
+      return await requestBotbooru(path, signal);
+    } catch (error) {
+      if (error instanceof BotbooruAccessError) botbooruBlocked = { error, at: Date.now() };
+      throw error;
+    }
+  }
+
+  async function requestBotbooru(path, signal) {
+    if (!(await ciBridge.detect(600))) throw new BotbooruAccessError("no-companion", "Needs the companion userscript to use your Botbooru login");
+    if (!ciBridge.canUseLogin("botbooru.com")) throw new BotbooruAccessError("old-companion", "Needs companion userscript 2.7 or newer");
+    try {
+      return await ciNet.fetchRemoteJson(`https://botbooru.com${path}`, { signal, siteLogin: true });
+    } catch (error) {
+      // Botbooru answers 401, or 404 {"detail":"login_required"} on posts, without a valid login (none yet, or expired)
+      if (error instanceof ciNet.HttpError && [401, 403, 404].includes(error.status)) throw new BotbooruAccessError("login", "Botbooru didn't accept the saved login; open botbooru.com in this browser while logged in");
+      if (error instanceof ciBridge.BridgeError) {
+        if (error.kind === "no-login") throw new BotbooruAccessError("login", error.message);
+        if (error.kind === "login-refused") throw new BotbooruAccessError("refused", error.message);
+        // An older userscript only allows the login on character pages
+        if (error.kind === "bad-url") throw new BotbooruAccessError("old-companion", "Needs companion userscript 2.7 or newer");
+      }
+      throw error;
+    }
+  }
+
+  const BOTBOORU_PAGE = 100; // the most /api/users takes
+
+  /**
+   * Every card a Botbooru user uploaded, newest first. Checks the login
+   * first: logged out, Botbooru quietly lists only the safe-for-work few.
+   * @returns {Promise<{name: string, links: string[]}>}
+   */
+  async function listBotbooruProfile(userId, { signal, onProgress } = {}) {
+    await fetchBotbooru("/auth/me", signal);
+    const ids = [];
+    let name = `user ${userId}`;
+    for (let offset = 0; offset < 10_000; offset += BOTBOORU_PAGE) {
+      const page = await fetchBotbooru(`/api/users/${userId}?upload_limit=${BOTBOORU_PAGE}&upload_offset=${offset}&upload_sort=latest`, signal);
+      name = str(page?.username) ?? name;
+      const uploads = Array.isArray(page?.uploads) ? page.uploads : [];
+      for (const upload of uploads) {
+        const id = String(upload?.id ?? "");
+        if (/^\d+$/.test(id) && (!upload.status || upload.status === "active") && !ids.includes(id)) ids.push(id);
+      }
+      const total = Number(page?.uploads_list_total) || 0;
+      onProgress?.(ids.length, total);
+      if (uploads.length < BOTBOORU_PAGE || offset + BOTBOORU_PAGE >= total) break;
+      await ciNet.sleep(1000, signal);
+    }
+    return { name, links: ids.map((id) => `https://botbooru.com/character/${id}`) };
+  }
+
   // ── Chub lorebooks ──
 
   /** @returns {Promise<{json: object, name: string, path: string}>} */
@@ -436,5 +507,5 @@ const ciSources = (() => {
     return cloned;
   }
 
-  return Object.freeze({ UnsupportedLinkError, resolve, load, loadChubLorebook, fetchChubDetail, withMarker, isCharacterCard, isLorebook, editable });
+  return Object.freeze({ UnsupportedLinkError, BotbooruAccessError, fetchBotbooru, resetBotbooruBlock, listBotbooruProfile, resolve, load, loadChubLorebook, fetchChubDetail, withMarker, isCharacterCard, isLorebook, editable });
 })();

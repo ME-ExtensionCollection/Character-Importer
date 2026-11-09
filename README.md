@@ -58,6 +58,18 @@ open botbooru.com: log in there once, in the browser Marinara is open in.
 Without it, the import says so and offers the login page or to ignore
 Botbooru galleries (Tools → Import turns them back on); Fetch assets picks
 up skipped galleries later.
+
+A Botbooru profile link (`botbooru.com/profile/<id>`) queues every card
+that creator uploaded, newest first, leaving out cards already in your
+library or already queued. It needs the same login: logged out, Botbooru
+lists only a creator's few safe-for-work cards, so the import stops and
+says so rather than queueing part of the list.
+
+A card that names another source you already have (such as a Botbooru
+re-upload of a Chub card) is skipped only if it's identical. Creators who
+moved from Chub often updated their cards on Botbooru, so a copy that
+differs is imported and noted as a possible update; Flag duplicates groups
+the two (they share the Chub link) so you can compare or keep both.
 Not yet: Perchance, and Chub expression packs that only come as a zip.
 
 ## Install
@@ -91,9 +103,9 @@ SillyTavern too.
   downloads from the Marinara page (RisuRealm, AICharacterCards, most image
   hosts, Chub's gallery API, Botbooru). Requests are GET only, without your
   cookies, never to local network addresses, and the first time a page asks
-  you're asked to allow it. The one exception is Botbooru character pages
-  (`botbooru.com/post/<number>`), which carry your Botbooru login so the
-  gallery list can be read; you're asked once before that happens. The
+  you're asked to allow it. The one exception is a few read-only Botbooru
+  addresses (character pages, creators' card lists and the login check),
+  which carry your Botbooru login for galleries and full creator lists; you're asked once before that happens. The
   userscript copies the login from botbooru.com pages beforehand (so the
   first import has it) and deletes it if you say no. The userscript menu can revoke either, or limit downloads
   to known card and image sites.

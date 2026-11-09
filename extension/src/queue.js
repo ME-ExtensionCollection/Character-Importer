@@ -116,6 +116,41 @@ const ciQueue = (() => {
     return { expressions: !!opts.downloadExpressions, localize: !!opts.localizeAssets, lorebooks: !!opts.downloadLorebooks, links: true };
   }
 
+  const SOURCE_NAMES = { chub: "Chub", botbooru: "Botbooru", uuid: "JanitorAI/Pygmalion", risu: "RisuRealm", wyvern: "Wyvern", datacat: "DataCat", aicc: "AICharacterCards" };
+  const sourceName = (key) => SOURCE_NAMES[key.split(":", 1)[0]] ?? "another link";
+
+  /**
+   * A creator's profile: lists their cards and queues them right after it,
+   * leaving out cards already in the library or already queued.
+   */
+  async function expandProfile(item, plan, existing, signal, setStep) {
+    setStep("Listing cards");
+    let listed;
+    try {
+      listed = await ciSources.listBotbooruProfile(plan.id, { signal, onProgress: (n, total) => setStep(`Listing cards ${n} / ${total}`) });
+    } catch (error) {
+      if (error instanceof ciSources.BotbooruAccessError) ciAssets.botbooruNotice(error.reason, "profile");
+      throw error;
+    }
+    const queued = new Set(queue.items.filter((i) => i.state === "pending" || i.state === "running").map((i) => i.url));
+    const fresh = [];
+    let owned = 0;
+    let already = 0;
+    for (const url of listed.links) {
+      if (item.opts.preventDuplicates && existing.keys.has(ciCore.normalizeSource(url))) owned++;
+      else if (queued.has(url)) already++;
+      else {
+        queued.add(url);
+        fresh.push({ url, opts: { ...item.opts }, state: "pending", note: "" });
+      }
+    }
+    queue.items.splice(queue.items.indexOf(item) + 1, 0, ...fresh);
+    const left = [owned && `${owned} already in the library`, already && `${already} already queued`].filter(Boolean);
+    item.name = listed.name;
+    item.state = fresh.length ? "done" : "skipped";
+    item.note = `${listed.name}: queued ${fresh.length} of ${listed.links.length} card${listed.links.length === 1 ? "" : "s"}${left.length ? ` (${left.join(", ")})` : ""}`;
+  }
+
   /**
    * Imports one link.
    * @returns {Promise<"link"|"content"|null>} why it was skipped as a duplicate, if it was
@@ -144,6 +179,11 @@ const ciQueue = (() => {
       const id = k && map.get(k);
       return id ? (ciLib.get()[id]?.name || "a character") : null;
     };
+
+    if (plan.kind === "list") {
+      await expandProfile(item, plan, existing, signal, setStep);
+      return null;
+    }
 
     // Cut off by a reload: Marinara may have saved the character before its assets were done
     if (wasInterrupted && plan.kind === "character") {
@@ -184,6 +224,20 @@ const ciQueue = (() => {
     }
 
     const hash = ciCore.contentHash(loaded.card);
+
+    // The card can name other sources too, e.g. a Botbooru re-upload of a Chub card. Only an
+    // identical copy is skipped: creators who moved sites often updated the card on the new one.
+    let olderCopy = null;
+    if (opts.preventDuplicates) {
+      const others = ciCore.keysFromCard(loaded.card).filter((k) => k !== key && existing.keys.has(k));
+      const same = others.find((k) => hash && ciLib.get()[existing.keys.get(k)]?.hash === hash);
+      if (same) {
+        finish("skipped", `Same card already in the library from ${sourceName(same)} (${lookup(existing.keys, same)})`);
+        return "content";
+      }
+      if (others.length) olderCopy = `${lookup(existing.keys, others[0])} from ${sourceName(others[0])}`;
+    }
+
     if (opts.preventDuplicates && opts.contentCheck && hash && existing.hashes.has(hash)) {
       finish("skipped", `Identical card already in the library (${lookup(existing.hashes, hash)})`);
       return "content";
@@ -245,6 +299,8 @@ const ciQueue = (() => {
       if (merged.merged) assets.summary.push(`${merged.merged} tag${merged.merged === 1 ? "" : "s"} merged to canonicals`);
     }
     assets.warnings.push(...tagNotes);
+    // Flag duplicates groups the two (they share the source link) to compare or merge
+    if (olderCopy) assets.summary.push(`differs from ${olderCopy}, maybe an update; see Flag duplicates`);
     const extra = assets.summary.length ? ` (${assets.summary.join(", ")})` : "";
     if (assets.warnings.length) finish("warn", `Imported ${name}${extra}; ${assets.warnings.join("; ")}`);
     else finish("done", `Imported ${name}${extra}`);

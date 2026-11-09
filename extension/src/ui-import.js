@@ -31,7 +31,7 @@ const ciImportUi = (() => {
       class: "ci-input ci-links",
       rows: 6,
       spellcheck: false,
-      placeholder: "One link per line\nhttps://chub.ai/characters/creator/name\nhttps://janitorai.com/characters/…\nhttps://realm.risuai.net/character/…",
+      placeholder: "One link per line\nhttps://chub.ai/characters/creator/name\nhttps://janitorai.com/characters/…\nhttps://botbooru.com/profile/… (queues all their cards)",
     });
     // After pasting, start a new line so the next link goes on its own line
     textarea.addEventListener("paste", () => {

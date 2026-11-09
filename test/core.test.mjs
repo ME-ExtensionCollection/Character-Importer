@@ -220,6 +220,7 @@ test("normalizeSource and keysFromCard know Botbooru", () => {
   assert.equal(core.normalizeSource("https://www.botbooru.com/post/97064"), "botbooru:97064");
   assert.equal(core.normalizeSource("https://botbooru.com/download/png/97064"), "botbooru:97064");
   assert.equal(core.normalizeSource("https://botbooru.com/wiki?t=meta"), "url:botbooru.com/wiki?t=meta");
+  assert.equal(core.normalizeSource("https://botbooru.com/profile/12695"), "botbooruuser:12695");
   // A Botbooru re-upload of a Chub card answers to both
   const keys = plain(core.keysFromCard({ extensions: { botbooru: { post_id: 97064 }, chub: { full_path: "DerpyOrangeCat/n-o-v-a-631623cf289c" } } }));
   assert.ok(keys.includes("botbooru:97064"));

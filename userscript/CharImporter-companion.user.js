@@ -12,7 +12,7 @@
 // @match       https://characterhub.org/*
 // @match       https://botbooru.com/*
 // @match       https://www.botbooru.com/*
-// @version     2.6
+// @version     2.7
 // @author      Rojikku
 // @description Hides Chub cards already in your Marinara Engine or SillyTavern library, and downloads files for the Char Importer extension from sites that block downloads from the Marinara page.
 // @run-at      document-idle
@@ -34,9 +34,9 @@
  *   - Marinara only: answers download requests from the Char Importer
  *     extension with GM_xmlhttpRequest, which isn't limited by CORS.
  *     Requests are GET only, to public addresses only, and without
- *     cookies. The one exception: Botbooru character pages
- *     (/post/<id>) carry your Botbooru login so the extension can read
- *     the gallery list. You're asked before either is first used.
+ *     cookies. The one exception: a few read-only Botbooru addresses
+ *     (character pages, creators' card lists, the login check) carry
+ *     your Botbooru login, for galleries and full creator lists. You're asked before either is first used.
  * On Botbooru: keeps a copy of your Botbooru login (Botbooru keeps it in
  *   the page's localStorage, not in a cookie), unless you said no to using it.
  * On Chub: hides (or greys out) cards you already own.
@@ -52,7 +52,7 @@
   const isChub = /(^|\.)(chub\.ai|characterhub\.org)$/.test(location.hostname);
   const isBotbooru = /(^|\.)botbooru\.com$/.test(location.hostname);
   const STALE_DAYS = 7;
-  const SCRIPT = { name: "Char Importer companion", version: "2.6" };
+  const SCRIPT = { name: "Char Importer companion", version: "2.7" };
 
   // ── Owned lists, one per app origin ──
 
@@ -223,8 +223,14 @@
       "githubusercontent.com", "github.com", "risuai.net", "risuai.xyz", "janitorai.com", "jannyai.com", "aicharactercards.com",
       "pixeldrain.com", "files.sillie.st", "postimg.cc", "ibb.co", "pomf2.lain.la", "litter.catbox.moe", "botbooru.com",
     ];
-    // Sites whose requests may carry your login for them, and the only paths that may: read-only pages behind a login
-    const LOGIN_SITES = { "botbooru.com": /^\/post\/\d+$/ };
+    // Sites whose requests may carry your login for them, and the only addresses (path and query) that may: read-only
+    const LOGIN_SITES = {
+      "botbooru.com": [
+        /^\/post\/\d+$/, // a character page (gallery list)
+        /^\/auth\/me$/, // is the login still valid
+        /^\/api\/users\/\d+\?upload_limit=\d{1,3}&upload_offset=\d{1,6}&upload_sort=latest$/, // a creator's card list
+      ],
+    };
     const active = new Map();
     const waiting = [];
     let recent = [];
@@ -286,13 +292,14 @@
       const url = new URL(raw);
       const host = url.hostname.toLowerCase();
       const site = Object.keys(LOGIN_SITES).find((s) => host === s || host.endsWith(`.${s}`));
-      if (!site || url.search || !LOGIN_SITES[site].test(url.pathname)) return { error: { kind: "bad-url", message: `Your login isn't sent to ${host}${url.pathname}` } };
+      if (!site || !LOGIN_SITES[site].some((re) => re.test(url.pathname + url.search))) return { error: { kind: "bad-url", message: `Your login isn't sent to ${host}${url.pathname}` } };
       const consent = GM_getValue("loginConsent", {});
       if (consent[site] === undefined) {
         consent[site] = window.confirm(
           `${SCRIPT.name}\n\nLet Char Importer use your ${site} login?\n\n` +
             `Needed for things ${site} only shows to logged-in users, such as a card's gallery. The userscript copies your login ` +
-            `when you open ${site} in this browser, and would send it only to read-only character pages (${site}/post/<number>). ` +
+            `when you open ${site} in this browser, and would send it only with read-only requests: character pages, creators' card lists and ` +
+            "the login check. " +
             "Other downloads still go without it. Change it from the userscript menu.",
         );
         GM_setValue("loginConsent", consent);
