@@ -152,6 +152,14 @@ const ciLib = (() => {
     return [...paths];
   }
 
+  /** Post IDs of every Botbooru character. */
+  async function ownedBotbooruIds() {
+    await load();
+    const ids = new Set();
+    for (const entry of Object.values(index)) for (const key of entry.keys ?? []) if (key.startsWith("botbooru:")) ids.add(key.slice(9));
+    return [...ids];
+  }
+
   async function status() {
     await load();
     const entries = Object.values(index);
@@ -163,7 +171,7 @@ const ciLib = (() => {
     };
   }
 
-  // ── Owned list for the companion userscript (hides owned cards on Chub) ──
+  // ── Owned list for the companion userscript (hides owned cards on Chub and Botbooru) ──
   // Same events as Dupe Link Skip, so one userscript serves both apps.
 
   let publishTimer = 0;
@@ -172,10 +180,10 @@ const ciLib = (() => {
   const MAX_SAVED_OWNED_BYTES = 600_000;
 
   /** Saves the list server side, so the userscript in another browser can fetch it. */
-  async function saveOwned(paths) {
-    const key = [...paths].sort().join("\n");
+  async function saveOwned(paths, botbooru) {
+    const key = `${[...paths].sort().join("\n")}\n#${[...botbooru].sort().join(",")}`;
     if (key === savedOwnedKey) return;
-    const value = { paths, updated: Date.now() };
+    const value = { paths, botbooru, updated: Date.now() };
     if (JSON.stringify(value).length > MAX_SAVED_OWNED_BYTES) {
       marinara.log.warn(`Owned Chub list too large to save for other browsers (${paths.length} cards)`);
       return;
@@ -187,12 +195,14 @@ const ciLib = (() => {
   async function publishOwned() {
     try {
       const paths = await ownedChubPaths();
+      // Botbooru post IDs ride along; SillyTavern's extension doesn't send or read them
+      const botbooru = await ownedBotbooruIds();
       window.dispatchEvent(
         new CustomEvent("dupelinkskip:owned", {
-          detail: JSON.stringify({ paths, updated: Date.now(), app: "marinara", origin: location.origin }),
+          detail: JSON.stringify({ paths, botbooru, updated: Date.now(), app: "marinara", origin: location.origin }),
         }),
       );
-      await saveOwned(paths);
+      await saveOwned(paths, botbooru);
     } catch (error) {
       marinara.log.warn("Could not publish the owned Chub list", error);
     }
@@ -217,5 +227,5 @@ const ciLib = (() => {
 
   const get = () => index ?? {};
 
-  return Object.freeze({ load, refresh, put, remove, existing, ownedChubPaths, status, get, entryFor, publishOwned, publishOwnedSoon, syncAddress, dispose });
+  return Object.freeze({ load, refresh, put, remove, existing, ownedChubPaths, ownedBotbooruIds, status, get, entryFor, publishOwned, publishOwnedSoon, syncAddress, dispose });
 })();

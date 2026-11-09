@@ -12,7 +12,7 @@
 // @match       https://characterhub.org/*
 // @match       https://botbooru.com/*
 // @match       https://www.botbooru.com/*
-// @version     2.7
+// @version     2.8
 // @author      Rojikku
 // @description Hides Chub cards already in your Marinara Engine or SillyTavern library, and downloads files for the Char Importer extension from sites that block downloads from the Marinara page.
 // @run-at      document-idle
@@ -35,11 +35,12 @@
  *     extension with GM_xmlhttpRequest, which isn't limited by CORS.
  *     Requests are GET only, to public addresses only, and without
  *     cookies. The one exception: a few read-only Botbooru addresses
- *     (character pages, creators' card lists, the login check) carry
- *     your Botbooru login, for galleries and full creator lists. You're asked before either is first used.
+ *     (character pages, card downloads, creators' card lists, the login
+ *     check) carry your Botbooru login, for galleries, full creator
+ *     lists, and so Botbooru knows which cards you downloaded. You're asked before either is first used.
  * On Botbooru: keeps a copy of your Botbooru login (Botbooru keeps it in
  *   the page's localStorage, not in a cookie), unless you said no to using it.
- * On Chub: hides (or greys out) cards you already own.
+ * On Chub and Botbooru: hides (or greys out) cards you already own.
  *
  * If Marinara or SillyTavern runs on another address or port, add it as
  * another @match line above (e.g. *://192.168.1.10:7860/*; the *:// covers
@@ -52,7 +53,7 @@
   const isChub = /(^|\.)(chub\.ai|characterhub\.org)$/.test(location.hostname);
   const isBotbooru = /(^|\.)botbooru\.com$/.test(location.hostname);
   const STALE_DAYS = 7;
-  const SCRIPT = { name: "Char Importer companion", version: "2.7" };
+  const SCRIPT = { name: "Char Importer companion", version: "2.8" };
 
   // ── Owned lists, one per app origin ──
 
@@ -66,9 +67,12 @@
   }
 
   function storeOwned(detail, origin = location.origin) {
-    const { paths, updated, app } = detail;
+    const { paths, botbooru, updated, app } = detail;
     if (!Array.isArray(paths)) throw new Error("no paths");
-    GM_setValue(`owned:${origin}`, { paths: paths.map((p) => String(p).toLowerCase()), updated: Number(updated) || Date.now(), app: app ?? "sillytavern" });
+    const value = { paths: paths.map((p) => String(p).toLowerCase()), updated: Number(updated) || Date.now(), app: app ?? "sillytavern" };
+    // Botbooru post IDs, sent by Char Importer only
+    if (Array.isArray(botbooru)) value.botbooru = botbooru.map(String);
+    GM_setValue(`owned:${origin}`, value);
     const origins = GM_getValue("ownedOrigins", []);
     if (!origins.includes(origin)) GM_setValue("ownedOrigins", [...origins, origin]);
     console.info(`[${SCRIPT.name}] Stored ${paths.length} owned Chub cards for ${origin}`);
@@ -99,7 +103,7 @@
             const owned = JSON.parse(res.responseText)?.value?.ownedChub;
             if (!owned || !Array.isArray(owned.paths)) throw new Error("No owned list saved yet; open Marinara once with Char Importer enabled");
             // Stamped with the sync time: the server copy is current whenever it can be fetched
-            storeOwned({ paths: owned.paths, updated: Date.now(), app: "marinara" }, url.origin);
+            storeOwned({ paths: owned.paths, botbooru: owned.botbooru, updated: Date.now(), app: "marinara" }, url.origin);
             GM_setValue("syncState", { at: Date.now(), error: null });
             resolve(owned.paths.length);
           } catch (error) {
@@ -190,6 +194,7 @@
 
   if (isBotbooru) {
     captureBotbooruLogin();
+    hideOwned(botbooruSite());
     return;
   }
 
@@ -207,7 +212,7 @@
     return;
   }
 
-  hideOwnedOnChub();
+  hideOwned(chubSite());
 
   // ── Download bridge (Marinara page) ──
 
@@ -227,6 +232,7 @@
     const LOGIN_SITES = {
       "botbooru.com": [
         /^\/post\/\d+$/, // a character page (gallery list)
+        /^\/download\/png\/\d+$/, // a card download, so Botbooru counts it for your account
         /^\/auth\/me$/, // is the login still valid
         /^\/api\/users\/\d+\?upload_limit=\d{1,3}&upload_offset=\d{1,6}&upload_sort=latest$/, // a creator's card list
       ],
@@ -298,8 +304,8 @@
         consent[site] = window.confirm(
           `${SCRIPT.name}\n\nLet Char Importer use your ${site} login?\n\n` +
             `Needed for things ${site} only shows to logged-in users, such as a card's gallery. The userscript copies your login ` +
-            `when you open ${site} in this browser, and would send it only with read-only requests: character pages, creators' card lists and ` +
-            "the login check. " +
+            `when you open ${site} in this browser, and would send it only with read-only requests: character pages, card downloads (so ` +
+            `${site} counts them for you), creators' card lists and the login check. ` +
             "Other downloads still go without it. Change it from the userscript menu.",
         );
         GM_setValue("loginConsent", consent);
@@ -327,7 +333,7 @@
         const i = line.indexOf(":");
         if (i <= 0) continue;
         const name = line.slice(0, i).trim().toLowerCase();
-        if (["content-type", "content-disposition", "content-length", "retry-after"].includes(name)) out[name] = line.slice(i + 1).trim();
+        if (["content-type", "content-disposition", "content-length", "retry-after", "x-botbooru-pace"].includes(name)) out[name] = line.slice(i + 1).trim();
       }
       return out;
     }
@@ -451,17 +457,74 @@
     ready();
   }
 
-  // ── Chub: hide owned cards ──
+  // ── Hide owned cards (Chub, Botbooru) ──
 
-  function hideOwnedOnChub() {
+  function chubSite() {
     const isLegacy = location.hostname.includes("characterhub.org");
     const LIST_SELECTOR = isLegacy ? "div.listings-container" : "#chara-list, .character-list-container";
-    let showOwned = GM_getValue("showOwned", false);
+    function pathFromHref(href) {
+      if (!href) return null;
+      const match = href.split(/[?#]/)[0].match(/\/characters\/([^/]+\/[^/]+)/);
+      if (!match) return null;
+      try {
+        return decodeURIComponent(match[1]).toLowerCase();
+      } catch {
+        return match[1].toLowerCase();
+      }
+    }
+    const cardLink = (card) => (isLegacy ? card.querySelector(".chub-card-info > div a") : card.closest("a[href]"));
+    return {
+      toggleKey: "showOwned",
+      ownedOf: (list) => list.paths.map((p) => String(p).toLowerCase()),
+      hasList: (list) => Array.isArray(list.paths),
+      noListText: "No owned list yet. Open Marinara or SillyTavern once to send it.",
+      // Extra banners whose changes don't add or remove cards (ChubDeslop's)
+      otherBanners: ".chubfix-unhide-banner",
+      containers: () => Array.from(document.querySelectorAll(LIST_SELECTOR)),
+      cards: () =>
+        Array.from(document.querySelectorAll(LIST_SELECTOR))
+          .flatMap((list) => (isLegacy ? Array.from(list.querySelectorAll(":scope div:has(>.chub-card-info)")) : Array.from(list.querySelectorAll("div.ant-card"))))
+          .map((card) => ({ el: isLegacy ? card : card.parentElement, id: pathFromHref(cardLink(card)?.getAttribute("href")) })),
+      pageId: () => pathFromHref(location.pathname),
+      placeBanner(banner, containers) {
+        const target = containers.at(-1)?.parentElement;
+        if (!target) return false;
+        if (banner.parentElement !== target) target.prepend(banner);
+        return true;
+      },
+    };
+  }
+
+  function botbooruSite() {
+    // Grid cards are <a href="/character/<id>" data-post-id>; buttons inside carry data-post-id on a <span>,
+    // and wiki mini cards have no data-post-id, so neither matches
+    const CARD = 'a[href^="/character/"][data-post-id]';
+    const cardEl = (a) => (a.parentElement && a.parentElement.children.length === 1 && !a.parentElement.matches("#gallery") ? a.parentElement : a);
+    return {
+      toggleKey: "showOwnedBotbooru",
+      ownedOf: (list) => (Array.isArray(list.botbooru) ? list.botbooru.map(String) : []),
+      hasList: (list) => Array.isArray(list.botbooru),
+      noListText: "No owned Botbooru list yet. Open Marinara once to send it.",
+      otherBanners: "",
+      containers: () => [...new Set(Array.from(document.querySelectorAll(CARD)).map((a) => cardEl(a).parentElement).filter(Boolean))],
+      cards: () => Array.from(document.querySelectorAll(CARD)).map((a) => ({ el: cardEl(a), id: a.getAttribute("data-post-id") })),
+      pageId: () => location.pathname.match(/^\/character\/(\d+)/)?.[1] ?? null,
+      placeBanner(banner, containers) {
+        const grid = containers[0];
+        if (!grid) return false;
+        if (banner.nextElementSibling !== grid) grid.before(banner);
+        return true;
+      },
+    };
+  }
+
+  function hideOwned(site) {
+    let showOwned = GM_getValue(site.toggleKey, false);
 
     let lists, owned, newest, appNames;
     function loadLists() {
-      lists = ownedLists();
-      owned = new Set(lists.flatMap((l) => l.paths.map((p) => String(p).toLowerCase())));
+      lists = ownedLists().filter(site.hasList);
+      owned = new Set(lists.flatMap(site.ownedOf));
       newest = lists.reduce((max, l) => Math.max(max, Number(l.updated) || 0), 0);
       appNames = [...new Set(lists.map((l) => (l.app === "marinara" ? "Marinara" : "SillyTavern")))].join(" / ") || "Marinara or SillyTavern";
     }
@@ -507,60 +570,36 @@
     `;
     document.head.append(style);
 
-    function pathFromHref(href) {
-      if (!href) return null;
-      const match = href.split(/[?#]/)[0].match(/\/characters\/([^/]+\/[^/]+)/);
-      if (!match) return null;
-      try {
-        return decodeURIComponent(match[1]).toLowerCase();
-      } catch {
-        return match[1].toLowerCase();
-      }
-    }
-
-    function getCards() {
-      return Array.from(document.querySelectorAll(LIST_SELECTOR)).flatMap((list) =>
-        isLegacy ? Array.from(list.querySelectorAll(":scope div:has(>.chub-card-info)")) : Array.from(list.querySelectorAll("div.ant-card")),
-      );
-    }
-
-    const cardLink = (card) => (isLegacy ? card.querySelector(".chub-card-info > div a") : card.closest("a[href]"));
-
     // Reused rather than rebuilt: recreating it on every change set off
     // ChubDeslop's observer, which rebuilt its banner, which set off ours...
     const banner = document.createElement("div");
     banner.className = "dls-banner";
     banner.addEventListener("click", () => {
       showOwned = !showOwned;
-      GM_setValue("showOwned", showOwned);
+      GM_setValue(site.toggleKey, showOwned);
       render();
     });
 
     function renderBanner(count, containers) {
-      const target = containers.at(-1)?.parentElement;
-      if (!target) {
-        banner.remove();
-        return;
-      }
       let text = "";
-      if (!lists.length) text = "No owned list yet. Open Marinara or SillyTavern once to send it.";
+      if (!lists.length) text = site.noListText;
       else if (count) text = showOwned ? `Hide ${count} owned cards` : `Show ${count} owned cards`;
       const age = newest ? (Date.now() - newest) / 86400000 : 0;
       if (lists.length && age > STALE_DAYS) text += `${text ? " — " : ""}owned list is ${Math.floor(age)} days old; open ${appNames} to refresh`;
       const failed = syncError();
       if (failed) text += `${text ? " — " : ""}sync failed: ${failed}`;
-      if (!text) {
+      if (!text || !containers.length) {
         if (banner.isConnected) banner.remove();
         return;
       }
       if (banner.textContent !== text) banner.textContent = text;
-      if (banner.parentElement !== target) target.prepend(banner);
+      if (!site.placeBanner(banner, containers)) banner.remove();
     }
 
     function renderPageNote() {
-      const path = pathFromHref(location.pathname);
+      const id = site.pageId();
       const existing = document.querySelector(".dls-page-note");
-      if (!path || !owned.has(path)) {
+      if (!id || !owned.has(id)) {
         existing?.remove();
         return;
       }
@@ -573,25 +612,22 @@
 
     function render() {
       let count = 0;
-      const containers = Array.from(document.querySelectorAll(LIST_SELECTOR));
-      for (const card of getCards()) {
-        // React reuses card elements, so marks are cleared as well as set
-        const path = pathFromHref(cardLink(card)?.getAttribute("href"));
-        const isOwned = !!path && owned.has(path);
-        const container = isLegacy ? card : card.parentElement;
-        if (!container) continue;
-        container.classList.toggle("dls-owned-hidden", isOwned && !showOwned);
-        container.classList.toggle("dls-owned-shown", isOwned && showOwned);
+      for (const { el, id } of site.cards()) {
+        // React and single-page sites reuse card elements, so marks are cleared as well as set
+        if (!el) continue;
+        const isOwned = !!id && owned.has(id);
+        el.classList.toggle("dls-owned-hidden", isOwned && !showOwned);
+        el.classList.toggle("dls-owned-shown", isOwned && showOwned);
         if (isOwned) count++;
       }
-      renderBanner(count, containers);
+      renderBanner(count, site.containers());
       renderPageNote();
     }
 
     let timer = null;
+    const banners = [".dls-banner", ".dls-page-note", site.otherBanners].filter(Boolean).join(", ");
     const observer = new MutationObserver((mutations) => {
-      // Ignore banner changes (ours and ChubDeslop's), which don't add or remove cards
-      const banners = ".dls-banner, .dls-page-note, .chubfix-unhide-banner";
+      // Ignore banner changes, which don't add or remove cards
       const onlyBanners = mutations.every((m) => {
         if (m.target.nodeType === Node.ELEMENT_NODE && m.target.closest?.(banners)) return true;
         return [...m.addedNodes, ...m.removedNodes].every((n) => (n.nodeType === Node.ELEMENT_NODE ? n.matches?.(banners) : !n.textContent.trim()));
@@ -601,6 +637,8 @@
       timer = setTimeout(render, 150);
     });
     observer.observe(document.body, { childList: true, subtree: true });
+    // Single-page navigation can change the page without adding cards (the page note)
+    window.addEventListener("popstate", () => setTimeout(render, 150));
     render();
   }
 })();

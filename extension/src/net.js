@@ -114,7 +114,7 @@ const ciNet = (() => {
    * `siteLogin` goes straight to the userscript, which adds your login for
    * the site (only sites the userscript allows it for).
    * @param {{accept?: string, signal?: AbortSignal, maxBytes?: number, timeoutMs?: number, onProgress?: Function, noBridge?: boolean, siteLogin?: boolean}} [options]
-   * @returns {Promise<{bytes: Uint8Array, contentType: string, finalUrl: string, via: "direct"|"bridge"}>}
+   * @returns {Promise<{bytes: Uint8Array, contentType: string, header: (name: string) => string|null, finalUrl: string, via: "direct"|"bridge"}>}
    */
   async function fetchRemote(url, options = {}) {
     if (!/^https?:\/\//i.test(url)) throw new Error(`Not a web address: ${url}`);
@@ -130,7 +130,7 @@ const ciNet = (() => {
         });
         checkStatus(result, url);
         noteResult(url, true);
-        return { bytes: result.bytes, contentType: result.headers.get("content-type") ?? "", finalUrl: result.url, via: "direct" };
+        return { bytes: result.bytes, contentType: result.headers.get("content-type") ?? "", header: (name) => result.headers.get(name), finalUrl: result.url, via: "direct" };
       } catch (error) {
         if (options.signal?.aborted) throw error;
         if (error instanceof TypeError) {
@@ -159,7 +159,7 @@ const ciNet = (() => {
       const headers = { get: (name) => result.headers[name.toLowerCase()] ?? null };
       checkStatus({ ...result, headers }, url);
       noteResult(url, true);
-      return { bytes: result.bytes ?? new TextEncoder().encode(result.text ?? ""), contentType: result.headers["content-type"] ?? "", finalUrl: result.finalUrl, via: "bridge" };
+      return { bytes: result.bytes ?? new TextEncoder().encode(result.text ?? ""), contentType: result.headers["content-type"] ?? "", header: headers.get, finalUrl: result.finalUrl, via: "bridge" };
     } catch (error) {
       if (error instanceof ciBridge.BridgeError) {
         if (error.kind === "absent") throw new BlockedError(`${host} blocks downloads from this page. Install the Char Importer companion userscript to fetch it.`);

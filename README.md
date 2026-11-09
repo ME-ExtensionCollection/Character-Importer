@@ -99,13 +99,19 @@ SillyTavern too.
 
 - **On Chub** it hides cards you already own (from Marinara and SillyTavern
   both). The banner above the list shows them again.
+- **On Botbooru** it does the same for cards imported from Botbooru
+  (Marinara only). A Botbooru re-upload of a Chub card you have isn't
+  hidden: the list doesn't say where a card came from, and it may be an
+  updated version anyway.
 - **On Marinara** it downloads for the extension from sites that block
   downloads from the Marinara page (RisuRealm, AICharacterCards, most image
   hosts, Chub's gallery API, Botbooru). Requests are GET only, without your
   cookies, never to local network addresses, and the first time a page asks
   you're asked to allow it. The one exception is a few read-only Botbooru
-  addresses (character pages, creators' card lists and the login check),
-  which carry your Botbooru login for galleries and full creator lists; you're asked once before that happens. The
+  addresses (character pages, card downloads, creators' card lists and the
+  login check), which carry your Botbooru login for galleries, full creator
+  lists, and so imports count as downloads on your Botbooru account (its
+  "Downloaded" filter and "Only updated" view then know about them); you're asked once before that happens. The
   userscript copies the login from botbooru.com pages beforehand (so the
   first import has it) and deletes it if you say no. The userscript menu can revoke either, or limit downloads
   to known card and image sites.
@@ -116,7 +122,7 @@ cover, add a line for it, e.g. `// @match *://192.168.1.10:7860/*`
 
 ### Chub in another browser
 
-To hide owned cards in a browser that doesn't have Marinara open, install
+To hide owned cards (Chub and Botbooru) in a browser that doesn't have Marinara open, install
 the userscript there too, then:
 
 1. In Marinara, open Char Importer → Tools → Companion userscript and copy

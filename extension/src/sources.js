@@ -314,9 +314,14 @@ const ciSources = (() => {
     return { card: rebuiltCard(detail, summary, { datacat: { id: plan.id } }), avatarDataUrl: await avatarFromProxy(proxied("/api/bot-browser/datacat/avatar", av)) };
   }
 
+  const CARD_ACCEPT = "image/png,application/json,*/*";
+
   /** A remote card file (PNG or JSON), direct or via the userscript. */
   async function loadRemoteFile(url, signal) {
-    const { bytes, contentType } = await ciNet.fetchRemote(url, { signal, accept: "image/png,application/json,*/*", timeoutMs: 30_000 });
+    return parseCardFile(await ciNet.fetchRemote(url, { signal, accept: CARD_ACCEPT, timeoutMs: 30_000 }));
+  }
+
+  async function parseCardFile({ bytes, contentType }) {
     const json = await ciPng.readCard(bytes);
     if (!json) {
       if (contentType.includes("text/html")) throw new Error("That link is a web page, not a card file");
@@ -395,7 +400,7 @@ const ciSources = (() => {
       }
       case "botbooru": {
         // The PNG has the card, avatar and lorebook; the gallery is an asset step (needs a login)
-        const file = await loadRemoteFile(`https://botbooru.com/download/png/${encodeURIComponent(plan.id)}`, signal);
+        const file = await loadBotbooruCard(plan.id, signal);
         result = { card: file.json, avatarDataUrl: file.avatarDataUrl };
         break;
       }
@@ -453,6 +458,46 @@ const ciSources = (() => {
       }
       throw error;
     }
+  }
+
+  // Botbooru spaces its own quick downloads 1.2-1.9 s apart and sends
+  // "X-Botbooru-Pace: warn" when a client should slow down (it then waits 3 s)
+  const BOTBOORU_GAP_MS = 2000;
+  const BOTBOORU_SLOW_GAP_MS = 5000;
+  let lastBotbooruDownload = 0;
+  let botbooruSlowUntil = 0;
+
+  /**
+   * A Botbooru card PNG. Sent with your login when it can be, so Botbooru
+   * counts the download for your account (its "Downloaded" filter and
+   * "Only updated" view); otherwise downloaded anonymously, as the card
+   * itself is public. The gallery step after it says when the login is missing.
+   */
+  async function loadBotbooruCard(id, signal) {
+    const gap = Date.now() < botbooruSlowUntil ? BOTBOORU_SLOW_GAP_MS : BOTBOORU_GAP_MS;
+    const wait = lastBotbooruDownload + gap - Date.now();
+    if (wait > 0) await ciNet.sleep(wait, signal);
+    const url = `https://botbooru.com/download/png/${encodeURIComponent(id)}`;
+    const options = { signal, accept: CARD_ACCEPT, timeoutMs: 30_000 };
+    let response = null;
+    try {
+      if ((await ciBridge.detect(600)) && ciBridge.canUseLogin("botbooru.com")) {
+        try {
+          response = await ciNet.fetchRemote(url, { ...options, siteLogin: true });
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          const loginProblem =
+            (error instanceof ciBridge.BridgeError && ["no-login", "login-refused", "bad-url"].includes(error.kind)) ||
+            (error instanceof ciNet.HttpError && [401, 403].includes(error.status));
+          if (!loginProblem) throw error;
+        }
+      }
+      response ??= await ciNet.fetchRemote(url, options);
+    } finally {
+      lastBotbooruDownload = Date.now();
+    }
+    if (response.header?.("x-botbooru-pace") === "warn") botbooruSlowUntil = Date.now() + 5 * 60 * 1000;
+    return parseCardFile(response);
   }
 
   const BOTBOORU_PAGE = 100; // the most /api/users takes
