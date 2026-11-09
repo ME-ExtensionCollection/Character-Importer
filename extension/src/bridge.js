@@ -10,7 +10,7 @@ const ciBridge = (() => {
   const PREFIX = "charimporter:bridge:";
   const V = 1;
   const pending = new Map();
-  let info = null; // {name, version, maxBytes, hostPolicy, cookieSites} once the userscript answered
+  let info = null; // {name, version, maxBytes, hostPolicy, loginSites} once the userscript answered
   let helloAt = 0;
   let readyWaiters = [];
 
@@ -29,7 +29,7 @@ const ciBridge = (() => {
   function onReady(event) {
     const detail = parse(event);
     if (!detail) return;
-    info = { name: String(detail.name ?? "userscript"), version: String(detail.version ?? "?"), maxBytes: Number(detail.maxBytes) || 32 * 1024 * 1024, hostPolicy: detail.hostPolicy ?? "public", cookieSites: Array.isArray(detail.cookieSites) ? detail.cookieSites.map(String) : [] };
+    info = { name: String(detail.name ?? "userscript"), version: String(detail.version ?? "?"), maxBytes: Number(detail.maxBytes) || 32 * 1024 * 1024, hostPolicy: detail.hostPolicy ?? "public", loginSites: Array.isArray(detail.loginSites) ? detail.loginSites.map(String) : [] };
     for (const resolve of readyWaiters) resolve(info);
     readyWaiters = [];
   }
@@ -73,8 +73,8 @@ const ciBridge = (() => {
 
   const available = () => !!info;
   const getInfo = () => info;
-  /** Whether the userscript can send cookies for this host (a newer companion). */
-  const canSendCookies = (host) => !!info?.cookieSites.some((site) => host === site || host.endsWith(`.${site}`));
+  /** Whether the userscript can send your login for this host (a newer companion). */
+  const canUseLogin = (host) => !!info?.loginSites.some((site) => host === site || host.endsWith(`.${site}`));
 
   class BridgeError extends Error {
     constructor(kind, message) {
@@ -86,9 +86,9 @@ const ciBridge = (() => {
   /**
    * GET a URL through the userscript.
    * @param {string} url
-   * `cookies` asks the userscript to send this browser's cookies for the site;
-   * it only does that for sites it lists in cookieSites, after asking the user.
-   * @param {{responseType?: "base64"|"text", accept?: string, timeoutMs?: number, maxBytes?: number, cookies?: boolean, signal?: AbortSignal, onProgress?: Function}} [options]
+   * `siteLogin` asks the userscript to send your login for the site; it only
+   * does that for sites it lists in loginSites, after asking the user.
+   * @param {{responseType?: "base64"|"text", accept?: string, timeoutMs?: number, maxBytes?: number, siteLogin?: boolean, signal?: AbortSignal, onProgress?: Function}} [options]
    * @returns {Promise<{status: number, ok: boolean, finalUrl: string, headers: Record<string,string>, bytes?: Uint8Array, text?: string}>}
    */
   async function fetchVia(url, options = {}) {
@@ -116,7 +116,7 @@ const ciBridge = (() => {
         },
         { once: true },
       );
-      send("request", { id, url, method: "GET", accept: options.accept, responseType, timeoutMs, maxBytes, cookies: !!options.cookies });
+      send("request", { id, url, method: "GET", accept: options.accept, responseType, timeoutMs, maxBytes, siteLogin: !!options.siteLogin });
     });
     if (detail.error) throw new BridgeError(detail.error.kind ?? "network", detail.error.message ?? `Userscript could not fetch ${url}`);
     const headers = {};
@@ -138,5 +138,5 @@ const ciBridge = (() => {
     pending.clear();
   }
 
-  return Object.freeze({ detect, available, getInfo, canSendCookies, fetch: fetchVia, BridgeError, dispose });
+  return Object.freeze({ detect, available, getInfo, canUseLogin, fetch: fetchVia, BridgeError, dispose });
 })();

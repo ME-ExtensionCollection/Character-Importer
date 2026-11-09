@@ -450,13 +450,14 @@ const ciAssets = (() => {
 
   async function requestBotbooruPost(postId, signal) {
     if (!(await ciBridge.detect(600))) throw new BotbooruAccessError("no-companion", "Botbooru galleries need the companion userscript");
-    if (!ciBridge.canSendCookies("botbooru.com")) throw new BotbooruAccessError("old-companion", "Botbooru galleries need companion userscript 2.4 or newer");
+    if (!ciBridge.canUseLogin("botbooru.com")) throw new BotbooruAccessError("old-companion", "Botbooru galleries need companion userscript 2.5 or newer");
     try {
-      return await ciNet.fetchRemoteJson(`https://botbooru.com/post/${postId}`, { signal, cookies: true });
+      return await ciNet.fetchRemoteJson(`https://botbooru.com/post/${postId}`, { signal, siteLogin: true });
     } catch (error) {
-      // Botbooru answers 404 {"detail":"login_required"} to visitors who aren't logged in
-      if (error instanceof ciNet.HttpError && [401, 403, 404].includes(error.status)) throw new BotbooruAccessError("login", "Not logged in to Botbooru in this browser");
-      if (error instanceof ciBridge.BridgeError && error.kind === "cookies-refused") throw new BotbooruAccessError("refused", error.message);
+      // Botbooru answers 404 {"detail":"login_required"} without a valid login (none yet, or expired)
+      if (error instanceof ciNet.HttpError && [401, 403, 404].includes(error.status)) throw new BotbooruAccessError("login", "Botbooru didn't accept the saved login; open botbooru.com in this browser while logged in");
+      if (error instanceof ciBridge.BridgeError && error.kind === "no-login") throw new BotbooruAccessError("login", error.message);
+      if (error instanceof ciBridge.BridgeError && error.kind === "login-refused") throw new BotbooruAccessError("refused", error.message);
       throw error;
     }
   }
@@ -505,11 +506,11 @@ const ciAssets = (() => {
     const retry = "Then run Tools → Assets → Fetch assets to get the galleries you skipped.";
     const text = {
       login: [
-        "Botbooru only shows a card's gallery to logged-in users, and this browser isn't logged in to Botbooru.",
-        "Log in to Botbooru in this browser (the one Marinara is open in). " + retry,
+        "Botbooru only shows a card's gallery to logged-in users, and the companion userscript has no working Botbooru login.",
+        "Botbooru keeps its login in the page, not in a cookie, so the userscript copies it when you open botbooru.com. Open it in this browser (the one Marinara is open in) and log in if you aren't. " + retry,
       ],
-      refused: ["You told the companion userscript not to send your Botbooru login.", "To change that, use \"Char Importer: ask again before sending site logins\" in the userscript menu. " + retry],
-      "old-companion": ["Your companion userscript is too old to send your Botbooru login.", "Update it to 2.4 or newer from this extension's userscript folder. " + retry],
+      refused: ["You told the companion userscript not to use your Botbooru login.", "To change that, use \"Char Importer: forget site logins\" in the userscript menu, and allow it when asked. " + retry],
+      "old-companion": ["Your companion userscript is too old to use your Botbooru login.", "Update it to 2.5 or newer from this extension's userscript folder. " + retry],
       "no-companion": ["Botbooru galleries are read through the companion userscript, which isn't running on this page.", "Install it (Tools → Companion userscript). " + retry],
     }[reason] ?? [];
     const d = ciDom.dialog({
@@ -527,7 +528,8 @@ const ciAssets = (() => {
         d.close();
       } },
       { label: "Not now", value: null },
-      reason === "login" ? { label: "Log in to Botbooru", kind: "primary", onClick: () => {
+      reason === "login" ? { label: "Open Botbooru", kind: "primary", onClick: () => {
+        botbooruBlocked = null;
         window.open("https://botbooru.com/account", "_blank", "noopener");
         d.close();
       } } : null,
