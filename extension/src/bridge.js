@@ -96,7 +96,8 @@ const ciBridge = (() => {
     if (!info) throw new BridgeError("absent", "The Char Importer companion userscript is not installed or not running on this page");
     const id = crypto.randomUUID();
     const timeoutMs = Math.min(options.timeoutMs ?? 60_000, 300_000);
-    const maxBytes = Math.min(options.maxBytes ?? 32 * 1024 * 1024, info.maxBytes);
+    // Up to what the userscript allows (64 MB): animated card PNGs can be larger than 32 MB
+    const maxBytes = Math.min(options.maxBytes ?? info.maxBytes, info.maxBytes);
     const responseType = options.responseType ?? "base64";
     const detail = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
