@@ -52,6 +52,7 @@ const ciSources = (() => {
       const id = parts.slice(-2).join("/");
       return { link, key, kind: "character", provider: "aicc", id, label: `AICC ${id}` };
     }
+    if (prefix === "botbooru") return { link, key, kind: "character", provider: "botbooru", id: rest, label: `Botbooru ${rest}` };
     if (prefix === "perchance") throw new UnsupportedLinkError("Perchance links aren't supported yet. Download the card and use Marinara's file import.");
     if (prefix === "url") return { link, key, kind: "character", provider: "url", id: link, label: host || link };
     throw new UnsupportedLinkError("Not a link or ID this importer understands");
@@ -388,6 +389,12 @@ const ciSources = (() => {
         break;
       case "aicc": {
         const file = await loadRemoteFile(`https://aicharactercards.com/wp-json/pngapi/v1/image/${encPath(plan.id)}`, signal);
+        result = { card: file.json, avatarDataUrl: file.avatarDataUrl };
+        break;
+      }
+      case "botbooru": {
+        // The PNG has the card, avatar and lorebook; the gallery is an asset step (needs a login)
+        const file = await loadRemoteFile(`https://botbooru.com/download/png/${encodeURIComponent(plan.id)}`, signal);
         result = { card: file.json, avatarDataUrl: file.avatarDataUrl };
         break;
       }

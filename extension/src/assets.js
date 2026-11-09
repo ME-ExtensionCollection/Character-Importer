@@ -419,6 +419,121 @@ const ciAssets = (() => {
     return { added: result.added, data };
   }
 
+  // ── Botbooru gallery ──
+
+  /** Why a Botbooru gallery couldn't be read: "login", "refused", "old-companion" or "no-companion". */
+  class BotbooruAccessError extends Error {
+    constructor(reason, message) {
+      super(message);
+      this.reason = reason;
+    }
+  }
+
+  const botbooruPostId = (data) => {
+    const id = String(data?.extensions?.botbooru?.post_id ?? "");
+    return /^\d+$/.test(id) ? id : null;
+  };
+
+  // After a refusal, later cards in the same run skip the request for a little while
+  let botbooruBlocked = null; // {error, at}
+
+  /** Botbooru's post JSON, read with this browser's Botbooru login (through the userscript). */
+  async function fetchBotbooruPost(postId, signal) {
+    if (botbooruBlocked && Date.now() - botbooruBlocked.at < 2 * 60 * 1000) throw botbooruBlocked.error;
+    try {
+      return await requestBotbooruPost(postId, signal);
+    } catch (error) {
+      if (error instanceof BotbooruAccessError) botbooruBlocked = { error, at: Date.now() };
+      throw error;
+    }
+  }
+
+  async function requestBotbooruPost(postId, signal) {
+    if (!(await ciBridge.detect(600))) throw new BotbooruAccessError("no-companion", "Botbooru galleries need the companion userscript");
+    if (!ciBridge.canSendCookies("botbooru.com")) throw new BotbooruAccessError("old-companion", "Botbooru galleries need companion userscript 2.4 or newer");
+    try {
+      return await ciNet.fetchRemoteJson(`https://botbooru.com/post/${postId}`, { signal, cookies: true });
+    } catch (error) {
+      // Botbooru answers 404 {"detail":"login_required"} to visitors who aren't logged in
+      if (error instanceof ciNet.HttpError && [401, 403, 404].includes(error.status)) throw new BotbooruAccessError("login", "Not logged in to Botbooru in this browser");
+      if (error instanceof ciBridge.BridgeError && error.kind === "cookies-refused") throw new BotbooruAccessError("refused", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Botbooru mini gallery into the character's gallery. Like the Chub
+   * gallery, URLs saved before are skipped.
+   * @returns {Promise<{added: number, failed: number, data: object}>}
+   */
+  async function importBotbooruGallery(charId, data, { signal, onProgress } = {}) {
+    const postId = botbooruPostId(data);
+    if (!postId) return { added: 0, failed: 0, data };
+    const post = await fetchBotbooruPost(postId, signal);
+    const images = Array.isArray(post?.mini_gallery?.images) ? post.mini_gallery.images : [];
+    const urls = images
+      .filter((img) => !img?.status || img.status === "approved")
+      .map((img) => img?.download_url || img?.url)
+      .filter((path) => typeof path === "string" && path)
+      .map((path) => new URL(path, "https://botbooru.com/").href)
+      .filter((url) => new URL(url).hostname === "botbooru.com");
+    const savedUrls = { ...(marker(data).gallery ?? {}) };
+    const pending = urls.filter((url) => !savedUrls[url]);
+    if (!pending.length) return { added: 0, failed: 0, data };
+    let result = { saved: {}, failures: {}, added: 0 };
+    try {
+      result = await saveImages(charId, pending, { signal, onProgress });
+    } finally {
+      Object.assign(savedUrls, result.saved);
+      if (Object.keys(result.saved).length) {
+        const row = await ciApi.updateCharacter(charId, { extensions: { char_importer: pinnedMarker(data, { gallery: savedUrls }) } }, { skipVersionSnapshot: true });
+        data = row?.data ?? data;
+      }
+    }
+    return { added: result.added, failed: Object.keys(result.failures).length, data };
+  }
+
+  // One notice at a time, and not again for a while after it's closed
+  let botbooruNoticeOpen = false;
+  let botbooruNoticeAt = 0;
+
+  /** Tells the user why Botbooru galleries were skipped, with what to do about it. Doesn't wait. */
+  function botbooruNotice(reason) {
+    if (botbooruNoticeOpen || Date.now() - botbooruNoticeAt < 10 * 60 * 1000) return;
+    botbooruNoticeOpen = true;
+    const { h } = ciDom;
+    const retry = "Then run Tools → Assets → Fetch assets to get the galleries you skipped.";
+    const text = {
+      login: [
+        "Botbooru only shows a card's gallery to logged-in users, and this browser isn't logged in to Botbooru.",
+        "Log in to Botbooru in this browser (the one Marinara is open in). " + retry,
+      ],
+      refused: ["You told the companion userscript not to send your Botbooru login.", "To change that, use \"Char Importer: ask again before sending site logins\" in the userscript menu. " + retry],
+      "old-companion": ["Your companion userscript is too old to send your Botbooru login.", "Update it to 2.4 or newer from this extension's userscript folder. " + retry],
+      "no-companion": ["Botbooru galleries are read through the companion userscript, which isn't running on this page.", "Install it (Tools → Companion userscript). " + retry],
+    }[reason] ?? [];
+    const d = ciDom.dialog({
+      title: "Botbooru gallery skipped",
+      body: [...text.map((t) => h("p", { text: t })), h("p", { class: "ci-muted", text: "The cards themselves were imported. Only their Botbooru galleries are missing." })],
+      onClose: () => {
+        botbooruNoticeOpen = false;
+        botbooruNoticeAt = Date.now();
+      },
+    });
+    d.setActions([
+      { label: "Ignore Botbooru galleries", onClick: () => {
+        ciSettings.set({ botbooruGallery: false });
+        ciDom.toast("Botbooru galleries turned off. Turn them back on in Tools → Import.", "info");
+        d.close();
+      } },
+      { label: "Not now", value: null },
+      reason === "login" ? { label: "Log in to Botbooru", kind: "primary", onClick: () => {
+        window.open("https://botbooru.com/account", "_blank", "noopener");
+        d.close();
+      } } : null,
+    ].filter(Boolean));
+  }
+
   // ── Chub lorebooks ──
 
   /**
@@ -640,6 +755,19 @@ const ciAssets = (() => {
         if (result.added) summary.push(`${result.added} gallery image${result.added === 1 ? "" : "s"}`);
       });
     }
+    if (options.localize && botbooruPostId(data) && ciSettings.get().botbooruGallery !== false) {
+      await step("botbooruGallery", "Botbooru gallery", async () => {
+        try {
+          const result = await importBotbooruGallery(charId, data, { signal, onProgress: (d, t) => onStep?.(`Botbooru gallery ${d} / ${t}`) });
+          data = result.data;
+          if (result.added) summary.push(`${result.added} Botbooru gallery image${result.added === 1 ? "" : "s"}`);
+          if (result.failed) warnings.push(`${result.failed} Botbooru gallery image${result.failed === 1 ? "" : "s"} could not be saved`);
+        } catch (error) {
+          if (error instanceof BotbooruAccessError) botbooruNotice(error.reason);
+          throw error;
+        }
+      });
+    }
     if (isChub && options.lorebooks) {
       await step("lorebooks", "Lorebooks", async () => {
         const n = await importChubLorebooks(charId, { ...data, extensions: { ...data.extensions, chub } }, { signal, onProgress: (d, t) => onStep?.(`Lorebooks ${d} / ${t}`) });
@@ -680,6 +808,7 @@ const ciAssets = (() => {
    */
   async function backfill({ onStatus }) {
     const run = startJob("Fetch assets");
+    botbooruBlocked = null; // the user may have just logged in
     try {
       const s = ciSettings.get();
       const parts = s.backfillParts;
@@ -694,6 +823,7 @@ const ciAssets = (() => {
           links: parts.links && !c.links,
           expressions: parts.expressions && isChub && !c.expressions && (entry.hasChubPack || s.checkAddedPacks),
           gallery: parts.gallery && isChub && !!entry.chubId && !c.gallery,
+          botbooruGallery: parts.gallery && s.botbooruGallery !== false && entry.keys?.some((k) => k.startsWith("botbooru:")) && !c.botbooruGallery,
           lorebooks: parts.lorebooks && isChub && !c.lorebooks,
           images: parts.images && !c.images,
         };
@@ -718,7 +848,7 @@ const ciAssets = (() => {
         const result = await importAssets(item.id, row.data, {
           links: w.links,
           expressions: w.expressions,
-          localize: w.gallery || w.images,
+          localize: w.gallery || w.botbooruGallery || w.images,
           lorebooks: w.lorebooks,
           freshChub: true,
           signal: run.controller.signal,

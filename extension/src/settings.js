@@ -12,6 +12,8 @@ const ciSettings = (() => {
     downloadLorebooks: true,
     // Save Chub gallery and images embedded in card text locally
     localizeAssets: true,
+    // Botbooru mini galleries (need a Botbooru login in this browser)
+    botbooruGallery: true,
     // Fetch assets also asks Chub about cards saved without a pack
     checkAddedPacks: false,
     expressionsTag: "EXP Downloaded",

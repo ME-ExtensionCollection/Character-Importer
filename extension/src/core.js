@@ -61,6 +61,11 @@ const ciCore = (() => {
     if (host.includes("wyvern.chat") && parts[0] === "characters" && parts[1]) return `wyvern:${parts[1].toLowerCase()}`;
     if (host.includes("datacat.run") && parts[0] === "characters" && parts[1]) return `datacat:${parts[1].toLowerCase()}`;
     if (host.includes("aicharactercards.com")) return `aicc:${parts.slice(-2).join("/").toLowerCase()}`;
+    if (host === "botbooru.com") {
+      // /character/<id>, /post/<id>, /download/png/<id>
+      const id = ["character", "post"].includes(parts[0]) ? parts[1] : parts[0] === "download" ? parts[2] : "";
+      if (/^\d+$/.test(id ?? "")) return `botbooru:${id}`;
+    }
 
     return `url:${host}/${parts.join("/")}${url.search}`;
   }
@@ -99,6 +104,7 @@ const ciCore = (() => {
     add(ext.char_importer?.source_key);
     if (ext.chub?.full_path) add(normalizeSource(`https://chub.ai/characters/${ext.chub.full_path}`));
     add(keyFromBotBrowserSource(ext.botBrowserSource));
+    if (/^\d+$/.test(String(ext.botbooru?.post_id ?? ""))) add(`botbooru:${ext.botbooru.post_id}`);
     if (ext.pygmalion_id) add(normalizeSource(`https://pygmalion.chat/${ext.pygmalion_id}`));
     if (ext.github_repo) add(normalizeSource(`https://github.com/${ext.github_repo}`));
     if (typeof ext.source_url === "string") add(normalizeSource(ext.source_url));

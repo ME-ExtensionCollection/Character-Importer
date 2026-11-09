@@ -75,6 +75,7 @@ const ciToolsUi = (() => {
         setting("Download Chub expressions", "downloadExpressions"),
         setting("Save gallery & card images locally", "localizeAssets"),
         setting("Download linked Chub lorebooks", "downloadLorebooks"),
+        setting("Save Botbooru galleries (needs a Botbooru login in this browser)", "botbooruGallery", "Read through the companion userscript with your Botbooru login. Part of \"Save gallery & card images locally\"."),
       ),
       section(
         "Tags this importer adds",

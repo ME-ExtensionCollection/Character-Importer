@@ -10,7 +10,7 @@
 // @match       https://chub.ai/*
 // @match       https://*.characterhub.org/*
 // @match       https://characterhub.org/*
-// @version     2.3
+// @version     2.4
 // @author      Rojikku
 // @description Hides Chub cards already in your Marinara Engine or SillyTavern library, and downloads files for the Char Importer extension from sites that block downloads from the Marinara page.
 // @run-at      document-idle
@@ -31,8 +31,10 @@
  *     (one list per app address; Chub hides cards from all of them)
  *   - Marinara only: answers download requests from the Char Importer
  *     extension with GM_xmlhttpRequest, which isn't limited by CORS.
- *     Requests are GET only, without cookies, to public addresses only.
- *     The first time a page asks, you're asked to allow it.
+ *     Requests are GET only, to public addresses only, and without
+ *     cookies, except Botbooru character pages (/post/<id>), which
+ *     send your Botbooru login so the extension can read the gallery
+ *     list. You're asked before either is first used.
  * On Chub: hides (or greys out) cards you already own.
  *
  * If Marinara or SillyTavern runs on another address or port, add it as
@@ -45,7 +47,7 @@
 
   const isChub = /(^|\.)(chub\.ai|characterhub\.org)$/.test(location.hostname);
   const STALE_DAYS = 7;
-  const SCRIPT = { name: "Char Importer companion", version: "2.3" };
+  const SCRIPT = { name: "Char Importer companion", version: "2.4" };
 
   // ── Owned lists, one per app origin ──
 
@@ -170,8 +172,10 @@
     const KNOWN_HOSTS = [
       "chub.ai", "characterhub.org", "charhub.io", "catbox.moe", "imgur.com", "imgbox.com", "discordapp.com", "discordapp.net",
       "githubusercontent.com", "github.com", "risuai.net", "risuai.xyz", "janitorai.com", "jannyai.com", "aicharactercards.com",
-      "pixeldrain.com", "files.sillie.st", "postimg.cc", "ibb.co", "pomf2.lain.la", "litter.catbox.moe",
+      "pixeldrain.com", "files.sillie.st", "postimg.cc", "ibb.co", "pomf2.lain.la", "litter.catbox.moe", "botbooru.com",
     ];
+    // Sites whose requests may carry this browser's cookies, and the only paths that may: read-only pages behind a login
+    const COOKIE_SITES = { "botbooru.com": /^\/post\/\d+$/ };
     const active = new Map();
     const waiting = [];
     let recent = [];
@@ -180,7 +184,7 @@
     const policy = () => GM_getValue("hostPolicy", "public");
 
     function ready() {
-      send("ready", { name: SCRIPT.name, version: SCRIPT.version, maxBytes: MAX_BYTES, hostPolicy: policy() });
+      send("ready", { name: SCRIPT.name, version: SCRIPT.version, maxBytes: MAX_BYTES, hostPolicy: policy(), cookieSites: Object.keys(COOKIE_SITES) });
     }
 
     function isPrivateHost(host) {
@@ -222,10 +226,28 @@
       if (trust[location.origin] === false) return false;
       const ok = window.confirm(
         `${SCRIPT.name}\n\nAllow ${location.origin} to download files from other websites through this userscript?\n\n` +
-          "Only for the Char Importer extension. Downloads are read-only, without your cookies, and never from local network addresses.",
+          "Only for the Char Importer extension. Downloads are read-only, without your cookies (unless you allow a site separately), and never from local network addresses.",
       );
       GM_setValue("trustedOrigins", { ...trust, [location.origin]: ok });
       return ok;
+    }
+
+    /** Whether this request may send cookies: an allowed site and path, and the user said yes once. */
+    function cookieCheck(raw) {
+      const url = new URL(raw);
+      const host = url.hostname.toLowerCase();
+      const site = Object.keys(COOKIE_SITES).find((s) => host === s || host.endsWith(`.${s}`));
+      if (!site || url.search || !COOKIE_SITES[site].test(url.pathname)) return { kind: "bad-url", message: `Cookies aren't sent to ${host}${url.pathname}` };
+      const consent = GM_getValue("cookieConsent", {});
+      if (consent[site] === undefined) {
+        consent[site] = window.confirm(
+          `${SCRIPT.name}\n\nSend your ${site} login with Char Importer's requests to ${site}?\n\n` +
+            `Needed for things ${site} only shows to logged-in users, such as a card's gallery. Only read-only character pages ` +
+            `(${site}/post/<number>) get your cookies; other downloads still go without them. Change it from the userscript menu.`,
+        );
+        GM_setValue("cookieConsent", consent);
+      }
+      return consent[site] ? null : { kind: "cookies-refused", message: `You chose not to send your ${site} login (change it from the userscript menu)` };
     }
 
     function respond(id, payload) {
@@ -266,7 +288,7 @@
       const handle = GM_xmlhttpRequest({
         method: "GET",
         url: req.url,
-        anonymous: true,
+        anonymous: !req.withCookies,
         timeout,
         responseType: req.responseType === "text" ? "text" : "blob",
         headers: req.accept ? { Accept: String(req.accept).slice(0, 200) } : undefined,
@@ -326,6 +348,13 @@
       const bad = checkUrl(req.url);
       if (bad) return reply(bad.kind, bad.message);
       if (!trusted()) return reply("untrusted-origin", `${location.origin} isn't allowed to use the userscript (change it from the userscript menu)`);
+      if (req.cookies === true) {
+        const refused = cookieCheck(req.url);
+        if (refused) return reply(refused.kind, refused.message);
+        req.withCookies = true;
+      } else {
+        req.withCookies = false;
+      }
       const now = Date.now();
       recent = recent.filter((t) => now - t < 60000);
       if (recent.length >= RATE_PER_MIN) return reply("busy", "Too many downloads; try again in a minute");
@@ -348,6 +377,10 @@
     GM_registerMenuCommand?.("Char Importer: forget allowed pages", () => {
       GM_setValue("trustedOrigins", {});
       alert("Pages will be asked again before downloading through this userscript.");
+    });
+    GM_registerMenuCommand?.("Char Importer: ask again before sending site logins", () => {
+      GM_setValue("cookieConsent", {});
+      alert("You'll be asked again before your login for a site (such as Botbooru) is sent.");
     });
     GM_registerMenuCommand?.(`Char Importer: downloads from ${policy() === "known" ? "any public site" : "known sites only"}`, () => {
       GM_setValue("hostPolicy", policy() === "known" ? "public" : "known");

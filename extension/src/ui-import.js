@@ -77,7 +77,7 @@ const ciImportUi = (() => {
           }, "Skip links whose character is already in the library"),
           contentBox,
           checkbox("Download Chub expressions", opts.downloadExpressions, (v) => (opts.downloadExpressions = v), "Expression packs become the character's sprites"),
-          checkbox("Save gallery & card images locally", opts.localizeAssets, (v) => (opts.localizeAssets = v), "Chub gallery and images in the card text are saved to the character's gallery"),
+          checkbox("Save gallery & card images locally", opts.localizeAssets, (v) => (opts.localizeAssets = v), "Chub and Botbooru galleries and images in the card text are saved to the character's gallery"),
           checkbox("Download linked Chub lorebooks", opts.downloadLorebooks, (v) => (opts.downloadLorebooks = v)),
         ),
         h(

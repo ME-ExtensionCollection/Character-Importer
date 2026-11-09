@@ -48,7 +48,15 @@ Browse a card site as usual, copy links, paste them all at once:
 
 Supported links: Chub characters and lorebooks, JanitorAI / JannyAI,
 Pygmalion, Wyvern, DataCat, RisuRealm (PNG or `.charx`),
-AICharacterCards, GitHub, and direct links to PNG or JSON cards.
+AICharacterCards, Botbooru, GitHub, and direct links to PNG or JSON cards.
+
+Botbooru cards (with their embedded lorebook) download without an account.
+Their gallery is only shown to logged-in users, so it's read through the
+companion userscript with your Botbooru login: log in at
+botbooru.com/account in the browser Marinara is open in. If you aren't
+logged in, the import says so and offers the login page or to ignore
+Botbooru galleries (Tools → Import turns them back on); Fetch assets picks
+up skipped galleries later.
 Not yet: Perchance, and Chub expression packs that only come as a zip.
 
 ## Install
@@ -80,9 +88,12 @@ SillyTavern too.
   both). The banner above the list shows them again.
 - **On Marinara** it downloads for the extension from sites that block
   downloads from the Marinara page (RisuRealm, AICharacterCards, most image
-  hosts, Chub's gallery API). Requests are GET only, without your cookies,
-  never to local network addresses, and the first time a page asks you're
-  asked to allow it. The userscript menu can revoke that, or limit downloads
+  hosts, Chub's gallery API, Botbooru). Requests are GET only, without your
+  cookies, never to local network addresses, and the first time a page asks
+  you're asked to allow it. The one exception to "without cookies" is
+  Botbooru character pages (`botbooru.com/post/<number>`), which carry your
+  Botbooru login so the gallery list can be read; you're asked once before
+  that happens. The userscript menu can revoke either, or limit downloads
   to known card and image sites.
 
 If Marinara or SillyTavern runs on an address the `@match` lines don't

@@ -111,7 +111,9 @@ const ciNet = (() => {
   /**
    * Downloads a remote URL: direct first, then the userscript bridge.
    * @param {string} url absolute http(s) URL
-   * @param {{accept?: string, signal?: AbortSignal, maxBytes?: number, timeoutMs?: number, onProgress?: Function, noBridge?: boolean}} [options]
+   * `cookies` goes straight to the userscript and sends this browser's login
+   * for the site (only sites the userscript allows it for).
+   * @param {{accept?: string, signal?: AbortSignal, maxBytes?: number, timeoutMs?: number, onProgress?: Function, noBridge?: boolean, cookies?: boolean}} [options]
    * @returns {Promise<{bytes: Uint8Array, contentType: string, finalUrl: string, via: "direct"|"bridge"}>}
    */
   async function fetchRemote(url, options = {}) {
@@ -120,7 +122,7 @@ const ciNet = (() => {
     const host = hostOf(url);
     let directError = null;
 
-    if (!corsBlockedHosts.has(host)) {
+    if (!corsBlockedHosts.has(host) && !options.cookies) {
       try {
         const result = await fetchWithTimeout(url, { headers: options.accept ? { Accept: options.accept } : undefined, credentials: "omit" }, {
           headers: options.timeoutMs ?? 15_000,
@@ -152,6 +154,7 @@ const ciNet = (() => {
         maxBytes: options.maxBytes,
         timeoutMs: options.timeoutMs ? options.timeoutMs + 60_000 : 120_000,
         onProgress: options.onProgress,
+        cookies: options.cookies,
       });
       const headers = { get: (name) => result.headers[name.toLowerCase()] ?? null };
       checkStatus({ ...result, headers }, url);

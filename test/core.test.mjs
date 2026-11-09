@@ -214,3 +214,14 @@ test("pickStFile prefers the exact folder, then a matching one, then any", () =>
   const parent = core.stFileIndex([{ path: "user/images/Airi6/embed-a.png", file: "p" }]);
   assert.equal(core.pickStFile(core.stImagePath("/user/images/Airi6/embed-a.png"), parent), "p");
 });
+
+test("normalizeSource and keysFromCard know Botbooru", () => {
+  assert.equal(core.normalizeSource("https://botbooru.com/character/97064"), "botbooru:97064");
+  assert.equal(core.normalizeSource("https://www.botbooru.com/post/97064"), "botbooru:97064");
+  assert.equal(core.normalizeSource("https://botbooru.com/download/png/97064"), "botbooru:97064");
+  assert.equal(core.normalizeSource("https://botbooru.com/wiki?t=meta"), "url:botbooru.com/wiki?t=meta");
+  // A Botbooru re-upload of a Chub card answers to both
+  const keys = plain(core.keysFromCard({ extensions: { botbooru: { post_id: 97064 }, chub: { full_path: "DerpyOrangeCat/n-o-v-a-631623cf289c" } } }));
+  assert.ok(keys.includes("botbooru:97064"));
+  assert.ok(keys.includes("chub:derpyorangecat/n-o-v-a-631623cf289c"));
+});
