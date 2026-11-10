@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadCore, loadDls } from "./helpers.mjs";
+import { ROOT, loadCore, loadDls } from "./helpers.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const core = loadCore();
 const dls = loadDls();
@@ -256,4 +258,36 @@ test("a repost carrying the original's key as also_keys is grouped with it", () 
   );
   assert.equal(identical.length, 0);
   assert.deepEqual(differing.map((g) => g.map((e) => e.id)), [["orig", "repost"]]);
+});
+
+test("owned list packs, reads back, and refuses damaged copies", async () => {
+  const paths = Array.from({ length: 20000 }, (_, i) => `creator${i % 900}/some-card-slug-${i}`);
+  const botbooru = Array.from({ length: 3000 }, (_, i) => String(100000 + i));
+  const packed = await core.packOwned(paths, botbooru, 123);
+  const plainSize = JSON.stringify({ paths, botbooru }).length;
+  assert.ok(JSON.stringify(packed).length < plainSize / 3, `packed ${JSON.stringify(packed).length} of ${plainSize}`);
+  const back = await core.unpackOwned(JSON.parse(JSON.stringify(packed)));
+  assert.deepEqual([...back.paths], paths);
+  assert.deepEqual([...back.botbooru], botbooru);
+  assert.equal(back.updated, 123);
+  // The older plain list still reads
+  assert.deepEqual([...(await core.unpackOwned({ paths: ["a/b"], botbooru: ["1"] })).paths], ["a/b"]);
+  // A flipped byte in the middle: gzip's CRC (or inflate) catches it
+  const bin = atob(packed.data);
+  const mid = bin.length >> 1;
+  const flipped = btoa(bin.slice(0, mid) + String.fromCharCode(bin.charCodeAt(mid) ^ 0x40) + bin.slice(mid + 1));
+  await assert.rejects(core.unpackOwned({ ...packed, data: flipped }));
+  // Cut short, or counts that don't match
+  await assert.rejects(core.unpackOwned({ ...packed, data: packed.data.slice(0, -400) }));
+  await assert.rejects(core.unpackOwned({ ...packed, count: packed.count + 1 }));
+  await assert.rejects(core.unpackOwned({ ...packed, format: "something-else" }));
+});
+
+test("the userscript's unpackOwned reads what the extension packs", async () => {
+  const src = readFileSync(join(ROOT, "userscript/CharImporter-companion.user.js"), "utf8");
+  const fn = src.match(/ {2}const OWNED_FORMAT = [\s\S]*?\n {2}async function unpackOwned\(stored\) \{[\s\S]*?\n {2}\}\n/)[0];
+  const unpack = new Function(`${fn}; return unpackOwned;`)();
+  const packed = await core.packOwned(["x/y", "z/w"], ["7"], 5);
+  assert.deepEqual(await unpack(packed), { paths: ["x/y", "z/w"], botbooru: ["7"], updated: 5 });
+  await assert.rejects(unpack({ ...packed, botbooruCount: 0 }));
 });

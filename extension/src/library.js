@@ -181,16 +181,22 @@ const ciLib = (() => {
 
   let publishTimer = 0;
   let savedOwnedKey = null;
-  // Leaves room in marinara.storage (1 MB in all) for settings
+  // Leaves room in marinara.storage (1 MB in all) for settings. Packed (gzip), so this is
+  // tens of thousands of cards; the plain list ran out at about 15,000.
   const MAX_SAVED_OWNED_BYTES = 600_000;
+  let warnedTooLarge = false;
 
-  /** Saves the list server side, so the userscript in another browser can fetch it. */
+  /** Saves the list server side, packed, so the userscript in another browser can fetch it. */
   async function saveOwned(paths, botbooru) {
     const key = `${[...paths].sort().join("\n")}\n#${[...botbooru].sort().join(",")}`;
     if (key === savedOwnedKey) return;
-    const value = { paths, botbooru, updated: Date.now() };
+    const value = await ciCore.packOwned(paths, botbooru);
     if (JSON.stringify(value).length > MAX_SAVED_OWNED_BYTES) {
       marinara.log.warn(`Owned Chub list too large to save for other browsers (${paths.length} cards)`);
+      if (!warnedTooLarge) {
+        warnedTooLarge = true;
+        ciDom.toast(`The owned list (${paths.length} Chub cards) is too large to save for the userscript in other browsers; the copy there stays as it was.`, "warn");
+      }
       return;
     }
     await marinara.storage.patch({ ownedChub: value });

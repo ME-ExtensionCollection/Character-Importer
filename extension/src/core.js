@@ -430,8 +430,53 @@ const ciCore = (() => {
     return out;
   }
 
+  // ── Owned list, packed for marinara.storage (1 MB per extension) ──
+  // gzip (which carries a CRC-32 of the content, so a damaged copy fails to unpack instead of
+  // reading wrong) as base64, plus counts that are checked again after unpacking. The companion
+  // userscript has its own copy of unpackOwned; keep the two in step.
+
+  const OWNED_FORMAT = "gzip-json-v1";
+
+  async function gzipBase64(text) {
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  async function gunzipBase64(data) {
+    const bin = atob(data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Response(stream).text();
+  }
+
+  /** Reads a stored owned list, packed or the older plain {paths, botbooru}. Throws if it doesn't check out. */
+  async function unpackOwned(stored) {
+    if (!stored || typeof stored !== "object") throw new Error("No owned list");
+    if (stored.format === undefined && Array.isArray(stored.paths)) return { paths: stored.paths, botbooru: stored.botbooru ?? [], updated: stored.updated };
+    if (stored.format !== OWNED_FORMAT || typeof stored.data !== "string") throw new Error(`Unknown owned list format ${stored.format}`);
+    const { paths, botbooru } = JSON.parse(await gunzipBase64(stored.data));
+    if (!Array.isArray(paths) || !Array.isArray(botbooru) || paths.length !== stored.count || botbooru.length !== stored.botbooruCount) {
+      throw new Error("Owned list doesn't match its counts");
+    }
+    return { paths, botbooru, updated: stored.updated };
+  }
+
+  /** Packs the owned list, and unpacks it again to make sure it reads back the same. */
+  async function packOwned(paths, botbooru, updated = Date.now()) {
+    const json = JSON.stringify({ paths, botbooru });
+    const packed = { format: OWNED_FORMAT, data: await gzipBase64(json), count: paths.length, botbooruCount: botbooru.length, updated };
+    const back = await unpackOwned(packed);
+    if (JSON.stringify({ paths: back.paths, botbooru: back.botbooru }) !== json) throw new Error("Owned list didn't read back the same after packing");
+    return packed;
+  }
+
   return Object.freeze({
     normName, normTag, botbooruUploader,
+    OWNED_FORMAT, packOwned, unpackOwned,
     UUID,
     isValidUrl,
     chubKey,

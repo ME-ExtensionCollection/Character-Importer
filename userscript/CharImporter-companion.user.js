@@ -12,7 +12,7 @@
 // @match       https://characterhub.org/*
 // @match       https://botbooru.com/*
 // @match       https://www.botbooru.com/*
-// @version     2.8
+// @version     2.9
 // @author      Rojikku
 // @description Hides Chub cards already in your Marinara Engine or SillyTavern library, and downloads files for the Char Importer extension from sites that block downloads from the Marinara page.
 // @run-at      document-idle
@@ -53,7 +53,7 @@
   const isChub = /(^|\.)(chub\.ai|characterhub\.org)$/.test(location.hostname);
   const isBotbooru = /(^|\.)botbooru\.com$/.test(location.hostname);
   const STALE_DAYS = 7;
-  const SCRIPT = { name: "Char Importer companion", version: "2.8" };
+  const SCRIPT = { name: "Char Importer companion", version: "2.9" };
 
   // ── Owned lists, one per app origin ──
 
@@ -80,6 +80,24 @@
 
   // ── Sync from a Marinara server (for a browser without Marinara open) ──
 
+  // Char Importer saves the list gzipped (extension/src/core.js packOwned; keep unpackOwned in
+  // step with the copy there). gzip's CRC-32 and the counts make a damaged copy fail, not misread.
+  const OWNED_FORMAT = "gzip-json-v1";
+  async function unpackOwned(stored) {
+    if (!stored || typeof stored !== "object") throw new Error("No owned list");
+    if (stored.format === undefined && Array.isArray(stored.paths)) return { paths: stored.paths, botbooru: stored.botbooru ?? [], updated: stored.updated };
+    if (stored.format !== OWNED_FORMAT || typeof stored.data !== "string") throw new Error(`Unknown owned list format ${stored.format}; update this userscript`);
+    const bin = atob(stored.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    const { paths, botbooru } = JSON.parse(text);
+    if (!Array.isArray(paths) || !Array.isArray(botbooru) || paths.length !== stored.count || botbooru.length !== stored.botbooruCount) {
+      throw new Error("Owned list doesn't match its counts");
+    }
+    return { paths, botbooru, updated: stored.updated };
+  }
+
   const SYNC_EVERY_MS = 30 * 1000;
 
   /** Fetches the owned list the extension saved on the server. Resolves its card count. */
@@ -95,13 +113,14 @@
         timeout: 15000,
         responseType: "text",
         headers: { Accept: "application/json" },
-        onload: (res) => {
+        onload: async (res) => {
           try {
             if (res.status === 401 || res.status === 403) throw new Error(`Marinara refused (${res.status}); sign in to Marinara in this browser, or use 127.0.0.1 if it runs on this computer`);
             if (res.status === 404) throw new Error("Not found (404); copy the address again from Char Importer's Tools");
             if (res.status < 200 || res.status >= 300) throw new Error(`Marinara answered ${res.status}`);
-            const owned = JSON.parse(res.responseText)?.value?.ownedChub;
-            if (!owned || !Array.isArray(owned.paths)) throw new Error("No owned list saved yet; open Marinara once with Char Importer enabled");
+            const stored = JSON.parse(res.responseText)?.value?.ownedChub;
+            if (!stored) throw new Error("No owned list saved yet; open Marinara once with Char Importer enabled");
+            const owned = await unpackOwned(stored);
             // Stamped with the sync time: the server copy is current whenever it can be fetched
             storeOwned({ paths: owned.paths, botbooru: owned.botbooru, updated: Date.now(), app: "marinara" }, url.origin);
             GM_setValue("syncState", { at: Date.now(), error: null });

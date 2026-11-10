@@ -17,7 +17,7 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export function loadSrc(files, expr, globals = {}) {
   const code = files.map((f) => readFileSync(join(ROOT, "extension/src", f), "utf8")).join("\n\n");
   const context = vm.createContext({
-    TextDecoder, TextEncoder, URL, Blob, Response, DecompressionStream, crypto, atob, btoa, Uint8Array, console,
+    TextDecoder, TextEncoder, URL, Blob, Response, CompressionStream, DecompressionStream, crypto, atob, btoa, Uint8Array, console,
     ...globals,
   });
   return vm.runInContext(`${code}\n;(${expr})`, context, { filename: files.join("+") });
