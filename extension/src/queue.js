@@ -2,12 +2,15 @@
 // added; each keeps the options of the dialog it came from. The queue is
 // saved after every step, so a reload can pick up where it stopped: a
 // character that was saved before the reload only gets its assets finished.
+// A queue that was running when the page went away starts again by itself
+// on the next load (setting "autoResumeQueue"); one you stopped stays paused.
+// A Web Lock keeps two Marinara tabs from running it at the same time.
 
 const ciQueue = (() => {
   "use strict";
 
   /** @typedef {{url: string, opts: object, state: "pending"|"running"|"done"|"warn"|"skipped"|"failed", note: string, interrupted?: boolean, charId?: string, name?: string}} QueueItem */
-  // shutdown: "Turn off Marinara when done" for this session only (never saved).
+  // shutdown: "Turn off Marinara when done" for this session (kept across a reload that resumes the run).
   // shutdownAt: when the countdown ends; shutdownSent: the request went to the watcher script
   // watcher: the shutdown watcher script's heartbeat is fresh (it's listening)
   const queue = { items: [], running: false, stop: false, paused: false, step: "", shutdown: false, shutdownAt: 0, shutdownSent: false, watcher: false };
@@ -21,6 +24,16 @@ const ciQueue = (() => {
   let controller = null;
   // Set when the extension is unloaded: the saved queue is left as it was, so the next load resumes it
   let disposed = false;
+  // While a run is going, "importQueueActive" holds {at, shutdown}, refreshed every HEARTBEAT_MS.
+  // Still there on the next load (the page went away mid run) and recent: the run starts again.
+  const ACTIVE_KEY = "importQueueActive";
+  const HEARTBEAT_MS = 20_000;
+  const RESUME_WITHIN_MS = 10 * 60_000;
+  let heartbeat = 0;
+  // Only one tab runs the queue; a reloading page lets go of it as it unloads
+  const LOCK_NAME = "marinara-char-importer-queue";
+  const LOCK_WAIT_MS = 15_000;
+  let lockWait = null;
 
   const notify = () => {
     for (const fn of listeners) {
@@ -43,11 +56,62 @@ const ciQueue = (() => {
     return writeChain;
   }
 
-  /** After a reload: links the last session didn't finish, paused until Resume or Dismiss. */
+  function markActive(on) {
+    if (disposed) return writeChain;
+    const write = on ? () => ciIdb.set(ACTIVE_KEY, { at: Date.now(), shutdown: queue.shutdown }) : () => ciIdb.del(ACTIVE_KEY);
+    writeChain = writeChain.then(write).catch((error) => marinara.log.warn("Could not save the import queue's run state", error));
+    return writeChain;
+  }
+
+  function startHeartbeat() {
+    clearInterval(heartbeat);
+    void markActive(true);
+    heartbeat = setInterval(() => void markActive(true), HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    clearInterval(heartbeat);
+    heartbeat = 0;
+    return markActive(false);
+  }
+
+  /**
+   * Runs `fn` holding the queue lock, waiting a while for another tab (or the
+   * page being reloaded) to let go. Returns false when it couldn't get it.
+   */
+  async function withQueueLock(fn) {
+    if (!navigator.locks?.request) {
+      await fn();
+      return true;
+    }
+    lockWait = new AbortController();
+    const signals = [lockWait.signal, AbortSignal.timeout?.(LOCK_WAIT_MS)].filter(Boolean);
+    const signal = signals.length > 1 && AbortSignal.any ? AbortSignal.any(signals) : signals[0];
+    try {
+      await navigator.locks.request(LOCK_NAME, { signal }, async () => {
+        lockWait = null;
+        if (!disposed) await fn();
+      });
+      return true;
+    } catch (error) {
+      if (error?.name === "AbortError" || error?.name === "TimeoutError") return false;
+      throw error;
+    } finally {
+      lockWait = null;
+    }
+  }
+
+  /**
+   * After a reload: links the last session didn't finish. Started again when the
+   * queue was running moments ago, otherwise paused until Resume or Dismiss.
+   * @returns {Promise<false|"paused"|"resumed">}
+   */
   async function restore() {
     const items = (await ciIdb.get("importQueue")) ?? [];
+    const active = await ciIdb.get(ACTIVE_KEY).catch(() => null);
     if (!items.some((i) => i.state === "pending" || i.state === "running")) {
       if (items.length) await ciIdb.del("importQueue");
+      if (active) await ciIdb.del(ACTIVE_KEY).catch(() => undefined);
       return false;
     }
     for (const item of items) {
@@ -59,8 +123,15 @@ const ciQueue = (() => {
     }
     queue.items = items;
     queue.paused = true;
+    const fresh = active && Date.now() - (Number(active.at) || 0) < RESUME_WITHIN_MS;
+    if (fresh && ciSettings.get().autoResumeQueue !== false) {
+      queue.shutdown = !!active.shutdown;
+      void run();
+      return "resumed";
+    }
+    if (active) await ciIdb.del(ACTIVE_KEY).catch(() => undefined);
     notify();
-    return true;
+    return "paused";
   }
 
   /**
@@ -103,6 +174,7 @@ const ciQueue = (() => {
   function setShutdown(on) {
     queue.shutdown = !!on;
     if (!on) cancelShutdown();
+    if (heartbeat) void markActive(true);
     notify();
   }
 
@@ -141,6 +213,7 @@ const ciQueue = (() => {
     if (queue.running) {
       queue.stop = true;
       stoppedByUser = true;
+      void stopHeartbeat();
     }
     notify();
   }
@@ -150,6 +223,7 @@ const ciQueue = (() => {
     queue.stop = true;
     stoppedByUser = true;
     controller?.abort();
+    void stopHeartbeat();
     notify();
   }
 
@@ -512,6 +586,26 @@ const ciQueue = (() => {
 
   async function run() {
     if (queue.running) return;
+    queue.running = true;
+    queue.paused = false;
+    queue.stop = false;
+    queue.step = "Waiting for the queue lock";
+    notify();
+    let got = false;
+    try {
+      got = await withQueueLock(runLocked);
+    } catch (error) {
+      marinara.log.error("Import queue failed to start", error);
+    }
+    if (got || disposed) return;
+    queue.running = false;
+    queue.paused = true;
+    queue.step = "";
+    notify();
+    ciDom.toast("The import queue is running in another Marinara tab (or was just stopped there). Resume here once it's done.", "warn");
+  }
+
+  async function runLocked() {
     cancelShutdown();
     stoppedByUser = false;
     queue.shutdownSent = false;
@@ -519,6 +613,7 @@ const ciQueue = (() => {
     queue.stop = false;
     queue.paused = false;
     controller = new AbortController();
+    startHeartbeat();
     notify();
     const skippedLinks = [];
     const skippedContent = [];
@@ -576,6 +671,7 @@ const ciQueue = (() => {
       controller = null;
       notify();
       await save();
+      await stopHeartbeat();
     }
     ciLib.publishOwnedSoon();
     // Left to finish on its own: turn Marinara off if asked (not when you stopped it yourself)
@@ -591,6 +687,10 @@ const ciQueue = (() => {
 
   function dispose() {
     disposed = true;
+    // The run state stays saved, so the next load picks the run up again
+    clearInterval(heartbeat);
+    heartbeat = 0;
+    lockWait?.abort();
     clearTimeout(shutdownTimer);
     queue.stop = true;
     controller?.abort();

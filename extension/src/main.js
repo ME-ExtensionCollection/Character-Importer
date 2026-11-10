@@ -11,7 +11,7 @@ const ciUnsubscribeBadge = ciQueue.subscribe((q) => {
   ciInject.setBadge(left ? String(left) : "");
 });
 
-// Links the last session didn't finish: shown paused, until Resume or Dismiss
+// Links the last session didn't finish: carried on if it was running, else shown paused
 ciQueue.restore().then(
   (restored) => restored && ciQueueUi.show(),
   (error) => marinara.log.warn("Could not restore the import queue", error),

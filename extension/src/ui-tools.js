@@ -113,6 +113,7 @@ const ciToolsUi = (() => {
       ),
       section(
         "Behaviour",
+        setting("Resume the import queue after a reload", "autoResumeQueue", "A queue that was running when the page reloaded (or the extension updated) carries on by itself. One you stopped stays paused."),
         setting("Floating button when Marinara's top bar is hidden", "floatingButton"),
         setting("Download blocked sprite images through a temporary gallery copy", "serverImageProxy", "Marinara's server fetches the image into the gallery, the extension reads it and removes the copy. Used before the companion userscript."),
       ),

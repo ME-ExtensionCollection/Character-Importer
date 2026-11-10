@@ -33,6 +33,8 @@ const ciSettings = (() => {
     importEmbeddedLorebook: true,
     splitDescription: false,
     regexScriptScope: "character",
+    // A queue cut off mid run by a reload starts again by itself on the next load
+    autoResumeQueue: true,
     // Fallback launcher when the top bar isn't there (mobile layouts)
     floatingButton: true,
     // Image bytes may be fetched through a temporary gallery copy when direct download is blocked
