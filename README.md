@@ -71,6 +71,9 @@ lists only a creator's few safe-for-work cards, so the import stops and
 says so rather than queueing part of the list. Tags listed under "Leave out of
 profile imports" (Tools → Import) skip a creator's cards that have them;
 pasting one of those cards on its own still imports it.
+Other extensions can add to that list through `window.marinaraCharImporter`
+(`addProfileTagBlacklist(tags)`, `isOnProfileTagBlacklist(tag)`,
+`profileTagBlacklist()`); Char Triage uses it for its "Tags you delete" list.
 
 A card that names another source you already have (such as a Botbooru
 re-upload of a Chub card) is skipped only if it's identical. The skipped

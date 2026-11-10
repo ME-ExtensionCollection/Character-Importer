@@ -2,6 +2,7 @@
 // leftover cleanup) runs after the buttons are in place.
 
 await ciSettings.load();
+ciShare.install();
 ciInject.start();
 ciQueueUi.ensure();
 

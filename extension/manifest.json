@@ -28,6 +28,7 @@
       "src/ui-queue.js",
       "src/ui-tools.js",
       "src/inject.js",
+      "src/share.js",
       "src/main.js"
     ],
     "cssPath": "extension.css"
