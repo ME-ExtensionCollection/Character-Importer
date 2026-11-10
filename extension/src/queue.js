@@ -238,7 +238,7 @@ const ciQueue = (() => {
       delete item.interrupted;
     }
     queue.paused = false;
-    if (!queue.running) queue.items = [];
+    // Kept on show, so "Copy remaining" still has them; Clear takes them away
     void save();
     notify();
   }

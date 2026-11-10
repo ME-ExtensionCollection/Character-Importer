@@ -28,7 +28,8 @@ Browse a card site as usual, copy links, paste them all at once:
   A queue that was running when you reloaded (say, to update extensions)
   carries on by itself, finishing the card that was cut off instead of
   importing it twice. One you stopped, or one left for over 10 minutes,
-  comes back paused with Resume and Dismiss. Only one Marinara tab runs the
+  comes back paused with Resume and Dismiss (dismissed links stay listed for
+  "Copy remaining" until you press Clear). Only one Marinara tab runs the
   queue at a time. "Resume the import queue after a reload" in settings
   turns the automatic part off.
 - **Library tools:** fetch assets for characters imported earlier, retry
